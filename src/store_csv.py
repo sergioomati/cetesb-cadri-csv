@@ -155,13 +155,25 @@ class CSVSchemas:
 
     CADRI_ITEMS_COLS = [
         'numero_documento',
-        'residuo',
-        'classe',
-        'estado_fisico',
-        'quantidade',
-        'unidade',
-        'pagina_origem',
-        'raw_fragment',
+        'item_numero',                # Número sequencial do item (01, 02, etc.)
+        'numero_residuo',             # Código do resíduo (D099, F001, etc.)
+        'descricao_residuo',          # Descrição completa do resíduo
+        'classe_residuo',             # Classe (I, II, IIA, IIB, etc.)
+        'estado_fisico',              # Estado físico (LÍQUIDO, SÓLIDO, GASOSO)
+        'oii',                        # Campo OII
+        'quantidade',                 # Quantidade numérica
+        'unidade',                    # Unidade de medida (t/ano, kg, etc.)
+        'composicao_aproximada',      # Composição aproximada
+        'metodo_utilizado',           # Método utilizado
+        'cor_cheiro_aspecto',         # Características físicas
+        'acondicionamento_codigos',   # Códigos de acondicionamento (E01,E04,E05)
+        'acondicionamento_descricoes', # Descrições do acondicionamento
+        'destino_codigo',             # Código de destino (T34, etc.)
+        'destino_descricao',          # Descrição do destino
+        'pagina_origem',              # Página do PDF onde foi encontrado
+        'raw_fragment',               # Fragmento de texto original
+        'tipo_documento',             # Tipo do documento de origem
+        'data_validade',              # Data de validade do documento
         'updated_at'
     ]
 

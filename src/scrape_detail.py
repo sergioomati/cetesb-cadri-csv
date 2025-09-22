@@ -251,9 +251,29 @@ class DetailScraper:
                 if link and link.get('href'):
                     doc_info['url_detalhe'] = link['href']
 
-            # Generate PDF URL if we have document number
-            if doc_info['numero_documento']:
-                doc_info['url_pdf'] = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn=12&ndocmn={doc_info['numero_documento']}"
+            # Generate PDF URL if we have document number and date
+            if doc_info['numero_documento'] and doc_info['data_emissao']:
+                from pdf_url_builder import build_pdf_url, get_default_idocmn
+
+                # Get idocmn based on document type
+                idocmn = get_default_idocmn(doc_info.get('tipo_documento', 'DOCUMENTO'))
+
+                # Build the direct PDF URL
+                doc_info['url_pdf'] = build_pdf_url(
+                    idocmn=idocmn,
+                    ndocmn=doc_info['numero_documento'],
+                    data_emissao=doc_info['data_emissao'],
+                    versao="01"
+                )
+
+                # Also store the authentication URL for fallback
+                doc_info['url_autenticidade'] = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn={idocmn}&ndocmn={doc_info['numero_documento']}"
+                return doc_info
+            elif doc_info['numero_documento']:
+                # If we don't have date, at least store authentication URL
+                idocmn = get_default_idocmn(doc_info.get('tipo_documento', 'DOCUMENTO'))
+                doc_info['url_autenticidade'] = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn={idocmn}&ndocmn={doc_info['numero_documento']}"
+                doc_info['url_pdf'] = ''  # Will be filled later
                 return doc_info
 
         except Exception as e:
@@ -286,9 +306,29 @@ class DetailScraper:
             if link and link.get('href'):
                 doc_info['url_detalhe'] = link['href']
 
-            # Generate PDF URL
-            if doc_info['numero_documento']:
-                doc_info['url_pdf'] = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn=12&ndocmn={doc_info['numero_documento']}"
+            # Generate PDF URL if we have document number and date
+            if doc_info['numero_documento'] and doc_info['data_emissao']:
+                from pdf_url_builder import build_pdf_url, get_default_idocmn
+
+                # Get idocmn based on document type
+                idocmn = get_default_idocmn(doc_info.get('tipo_documento', 'DOCUMENTO'))
+
+                # Build the direct PDF URL
+                doc_info['url_pdf'] = build_pdf_url(
+                    idocmn=idocmn,
+                    ndocmn=doc_info['numero_documento'],
+                    data_emissao=doc_info['data_emissao'],
+                    versao="01"
+                )
+
+                # Also store the authentication URL for fallback
+                doc_info['url_autenticidade'] = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn={idocmn}&ndocmn={doc_info['numero_documento']}"
+                return doc_info
+            elif doc_info['numero_documento']:
+                # If we don't have date, at least store authentication URL
+                idocmn = get_default_idocmn(doc_info.get('tipo_documento', 'DOCUMENTO'))
+                doc_info['url_autenticidade'] = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn={idocmn}&ndocmn={doc_info['numero_documento']}"
+                doc_info['url_pdf'] = ''  # Will be filled later
                 return doc_info
 
         except Exception as e:

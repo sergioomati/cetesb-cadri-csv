@@ -1004,3 +1004,210 @@ def validate_extracted_data():
 - Interface web para monitoramento
 - Processamento paralelo de parsing
 - Machine Learning para melhorar extração
+
+---
+
+## 📊 STATUS ATUAL DA IMPLEMENTAÇÃO (Setembro 2024)
+
+### ✅ Módulos Completamente Implementados
+
+#### 1. Interactive PDF Downloader
+- **Arquivo**: `interactive_pdf_downloader.py`
+- **Status**: ✅ **COMPLETO e FUNCIONAL**
+- **Funcionalidades**:
+  - Download via automação Playwright
+  - Detecção de botões "Consultar" e "Visualize"
+  - Tratamento de erros abrangente
+  - Rate limiting configurável
+  - Suporte a retry e fallback
+  - Integração com CSV de status
+
+#### 2. PDF Direct Downloaders
+- **Arquivos**:
+  - `pdf_direct_downloader.py` (genérico)
+  - `cert_mov_direct_downloader.py` (especializado)
+- **Status**: ✅ **COMPLETO e FUNCIONAL**
+- **Funcionalidades**:
+  - Download direto usando padrão de URL descoberto
+  - Múltiplas versões de tentativa (01, 02, 03)
+  - Validação de PDFs baixados
+  - Integração com sistema de status
+  - Taxa de sucesso: 100% para documentos testados
+
+#### 3. Pipeline Integration
+- **Arquivo**: `src/pipeline.py`
+- **Status**: ✅ **COMPLETO**
+- **Funcionalidades**:
+  - Estágios `--stage pdf` e `--stage parse` integrados
+  - Pipeline completo `--stage all` funcional
+  - Suporte a force-reparse e filtros por tipo
+
+### ⚠️ Módulos com Problemas Identificados
+
+#### PDF Parser Standalone
+- **Arquivo**: `pdf_parser_standalone.py`
+- **Status**: ⚠️ **IMPLEMENTADO mas PARSING INADEQUADO**
+- **Problemas**:
+  - Parser não extrai campos estruturados conforme layout real dos PDFs
+  - Nova lógica estruturada não está sendo ativada (fallback sempre usado)
+  - Schema CSV usando campos antigos em vez do schema expandido
+  - Campos específicos da imagem não são extraídos separadamente
+
+---
+
+## ❌ DIAGNÓSTICO DO PROBLEMA DE PARSING
+
+### Problema Principal
+O parser atual consegue extrair dados, mas **não está capturando os campos estruturados específicos** mostrados na imagem de exemplo dos PDFs CADRI.
+
+### Análise Técnica
+
+#### O que está acontecendo:
+1. **Fallback sempre ativado**: Método `_extract_residuos_enhanced()` não encontra padrões
+2. **Schema incorreto**: Usando `codigo_residuo` em vez de `numero_residuo`
+3. **Patterns inadequados**: Regex não corresponde ao formato real do texto
+4. **Dados misturados**: Todos os campos estão sendo salvos em `linha_original` em vez de campos separados
+
+#### Evidência do Problema:
+```
+# Dados atuais extraídos (campo codigo_residuo):
+15.00.749, 32.00.528, 15.15.007, 91.10.924, 20.12.911
+
+# Dados corretos que deveriam ser extraídos (numero_residuo):
+D099
+```
+
+### Campos Alvo (baseados na imagem real do PDF)
+
+Conforme evidenciado na imagem `image.png`, os PDFs contêm a seguinte estrutura:
+
+```
+01 Resíduo : D099 - Água de lavagem de tubulação referente a obra realizada na Rodovia Cônego Domênico Rangoni Km 268.
+
+Classe : I Estado Físico : LIQUIDO O/I : I/O Qtde : 300 t / ano
+
+Composição Aproximada : Água de lavagem de tubulação.
+
+Método Utilizado : Conforme declarado pela entidade geradora.
+
+Cor, Cheiro, Aspecto : Característicos.
+
+Acondicionamento : E01 - Tambor
+Acondicionamento : E04 - Tanque
+Acondicionamento : E05 - Bombonas
+
+Destino : T34 - Outros tratamentos (especificar)
+```
+
+#### Campos que devem ser extraídos separadamente:
+1. **item_numero**: `01`
+2. **numero_residuo**: `D099`
+3. **descricao_residuo**: "Água de lavagem de tubulação referente a obra..."
+4. **classe_residuo**: `I`
+5. **estado_fisico**: `LIQUIDO`
+6. **oii**: `I/O`
+7. **quantidade**: `300`
+8. **unidade**: `t/ano`
+9. **composicao_aproximada**: "Água de lavagem de tubulação"
+10. **metodo_utilizado**: "Conforme declarado pela entidade geradora"
+11. **cor_cheiro_aspecto**: "Característicos"
+12. **acondicionamento_codigos**: `E01,E04,E05`
+13. **acondicionamento_descricoes**: "Tambor | Tanque | Bombonas"
+14. **destino_codigo**: `T34`
+15. **destino_descricao**: "Outros tratamentos (especificar)"
+
+---
+
+## 🎯 PLANO DE CORREÇÃO DETALHADO
+
+### Fase 1: Diagnóstico e Ajuste dos Patterns (2h)
+1. **Analisar texto real extraído** do PDF de teste 12150074960108052015
+2. **Ajustar regex patterns** para corresponder ao formato exato:
+   - Pattern para `01 Resíduo : D099 - ...`
+   - Pattern para `Classe : I Estado Físico : LIQUIDO`
+   - Pattern para múltiplos `Acondicionamento : E01 - Tambor`
+3. **Implementar debug detalhado** para entender por que fallback é usado
+4. **Corrigir detecção da seção estruturada**
+
+### Fase 2: Correção do Schema e Lógica de Parsing (2h)
+1. **Forçar uso do novo schema** expandido (20+ campos)
+2. **Corrigir método `_extract_residuos_enhanced`** para detectar padrões corretos
+3. **Implementar extração campo por campo** conforme layout da imagem
+4. **Validar mapeamento correto** para o CSV de saída
+
+### Fase 3: Parser Especializado para CERT MOV (1h)
+1. **Criar parser específico** para documentos "CERT MOV RESIDUOS INT AMB"
+2. **Implementar detecção de blocos** de resíduos individuais
+3. **Extrair cada campo estruturado** mantendo hierarquia
+4. **Mapear corretamente** para novo schema CSV
+
+### Fase 4: Testes e Validação (1-2h)
+1. **Testar com documento 12150074960108052015** (formato correto confirmado)
+2. **Verificar extração de todos os campos** da imagem
+3. **Validar schema de saída** com novos campos
+4. **Testar com múltiplos documentos** do mesmo tipo
+
+### Fase 5: Integração Final (30min)
+1. **Atualizar pipeline principal** para usar parser corrigido
+2. **Documentar novos campos** extraídos
+3. **Testar fluxo completo** end-to-end
+
+### Cronograma Total: 4-6 horas
+
+---
+
+## 📈 RESULTADO ESPERADO
+
+Após a correção, o parser deve gerar saída como:
+
+```csv
+numero_documento,item_numero,numero_residuo,descricao_residuo,classe_residuo,estado_fisico,oii,quantidade,unidade,composicao_aproximada,metodo_utilizado,cor_cheiro_aspecto,acondicionamento_codigos,acondicionamento_descricoes,destino_codigo,destino_descricao,...
+12150074960108052015,01,D099,"Água de lavagem de tubulação referente a obra realizada na Rodovia Cônego Domênico Rangoni Km 268",I,LIQUIDO,I/O,300,t/ano,"Água de lavagem de tubulação","Conforme declarado pela entidade geradora","Característicos","E01,E04,E05","Tambor | Tanque | Bombonas",T34,"Outros tratamentos (especificar)",...
+```
+
+### Comparação Antes vs. Depois
+
+#### ❌ Antes (dados misturados):
+```csv
+codigo_residuo,descricao_residuo,linha_original
+15.00.749,"6 ENTIDADE GERADORA Nome...","15007496 ENTIDADE GERADORA... 01 Resíduo : D099 - Água de lavagem..."
+```
+
+#### ✅ Depois (dados estruturados):
+```csv
+numero_residuo,descricao_residuo,classe_residuo,estado_fisico,acondicionamento_codigos,destino_codigo
+D099,"Água de lavagem de tubulação...",I,LIQUIDO,"E01,E04,E05",T34
+```
+
+---
+
+## 🔧 PRÓXIMOS PASSOS IMEDIATOS
+
+1. **Executar diagnóstico** do texto extraído do PDF
+2. **Ajustar patterns regex** para formato real
+3. **Corrigir lógica de parsing** estruturado
+4. **Testar com documento conhecido** (12150074960108052015)
+5. **Validar todos os campos** da imagem
+
+---
+
+## 📝 NOTAS DE IMPLEMENTAÇÃO ATUALIZADAS
+
+### Lições Aprendidas
+- PDFs CADRI têm estrutura muito específica que requer patterns customizados
+- Fallback genérico mascara problemas na lógica principal
+- Schema expandido é necessário mas deve ser forçado corretamente
+- Teste com documentos reais é essencial para validação
+
+### Dependências Confirmadas
+- ✅ Playwright instalado e configurado
+- ✅ fitz (PyMuPDF) instalado e funcional
+- ✅ Estrutura de CSVs existente
+- ✅ Diretórios criados (data/pdfs/)
+- ✅ PDFs de teste disponíveis
+
+### Status de Testes
+- ✅ Download de PDFs: Funcional
+- ⚠️ Parsing de PDFs: Precisa correção
+- ✅ Integração com pipeline: Funcional
+- ⚠️ Schema de dados: Precisa ajuste

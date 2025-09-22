@@ -2,11 +2,11 @@
 """
 CETESB CADRI Scraping Pipeline
 
-Main orchestrator for data collection:
+Main orchestrator for complete data collection:
 1. Search companies by seed (razao social)
 2. Scrape detail pages for CADRI documents and extract URLs
-
-Note: PDF download and parsing are handled by separate modules
+3. Download PDFs using direct method and interactive fallback
+4. Parse PDFs to extract waste data
 """
 
 import asyncio
@@ -156,12 +156,79 @@ class Pipeline:
         self.checkpoint()
         return total_docs
 
+    async def stage_pdf(self, doc_type: str = None):
+        """Stage 3: Download PDFs using direct method with interactive fallback"""
+        logger.info("=== Starting Stage 3: PDF Download ===")
+
+        # Import PDF downloaders
+        from pathlib import Path
+        sys.path.append(str(Path(__file__).parent.parent))
+
+        try:
+            from cert_mov_direct_downloader import CertMovDirectDownloader
+            from interactive_pdf_downloader import InteractivePDFDownloader
+        except ImportError as e:
+            logger.error(f"Could not import PDF downloaders: {e}")
+            return {"success": 0, "failed": 0}
+
+        total_stats = {"success": 0, "failed": 0, "skipped": 0, "already_exists": 0}
+
+        # First: Try direct downloads for CERT MOV RESIDUOS INT AMB
+        if not doc_type or doc_type == "CERT MOV RESIDUOS INT AMB":
+            logger.info("Attempting direct downloads for CERT MOV RESIDUOS INT AMB...")
+            async with CertMovDirectDownloader() as direct_downloader:
+                direct_stats = await direct_downloader.download_cert_mov_documents()
+
+                # Merge stats
+                for key in total_stats:
+                    total_stats[key] += direct_stats.get(key, 0)
+
+                logger.info(f"Direct download stats: {direct_stats}")
+
+        # Second: Use interactive downloader for failures
+        logger.info("Using interactive downloader for failed documents...")
+        async with InteractivePDFDownloader() as interactive_downloader:
+            interactive_stats = await interactive_downloader.download_failed_documents(doc_type)
+
+            # Merge stats
+            for key in total_stats:
+                if key in interactive_stats:
+                    total_stats[key] += interactive_stats[key]
+
+            logger.info(f"Interactive download stats: {interactive_stats}")
+
+        logger.info(f"Total PDF download stats: {total_stats}")
+        self.checkpoint()
+        return total_stats
+
+    def stage_parse(self, force_reparse: bool = False):
+        """Stage 4: Parse downloaded PDFs to extract waste data"""
+        logger.info("=== Starting Stage 4: PDF Parsing ===")
+
+        # Import PDF parser
+        from pathlib import Path
+        sys.path.append(str(Path(__file__).parent.parent))
+
+        try:
+            from pdf_parser_standalone import PDFParser
+        except ImportError as e:
+            logger.error(f"Could not import PDF parser: {e}")
+            return {"parsed": 0, "failed": 0}
+
+        with PDFParser() as parser:
+            stats = parser.parse_all_pdfs(force_reparse=force_reparse)
+
+        logger.info(f"PDF parsing stats: {stats}")
+        self.checkpoint()
+        return stats
+
 
     async def run_all(self, max_iterations: int = 5):
-        """Run data collection pipeline (list + detail only)"""
-        logger.info("=== Starting Data Collection Pipeline ===")
-        logger.info("Note: PDF download and parsing are handled separately")
+        """Run complete pipeline (all stages)"""
+        logger.info("=== Starting Complete CADRI Pipeline ===")
         CSVSchemas.init_all()
+
+        total_docs = 0
 
         for iteration in range(1, max_iterations + 1):
             if not self.running:
@@ -178,6 +245,7 @@ class Pipeline:
 
             # Stage 2: Detail scraping
             docs = self.stage_detail(urls)
+            total_docs += docs
 
             # Show metrics
             logger.info(f"\nIteration {iteration} complete:")
@@ -190,15 +258,26 @@ class Pipeline:
                 logger.info("No new documents found, stopping")
                 break
 
-        logger.info("\n=== Data Collection Complete ===")
-        logger.info(metrics.get_summary())
-        logger.info("\n📊 Data collected successfully!")
+        # Stage 3: PDF Download (after all data collection)
+        if total_docs > 0:
+            logger.info("\n=== Starting PDF Download Stage ===")
+            pdf_stats = await self.stage_pdf()
+
+            # Stage 4: PDF Parsing (after downloads)
+            logger.info("\n=== Starting PDF Parsing Stage ===")
+            parse_stats = self.stage_parse()
+
+            logger.info("\n=== Complete Pipeline Summary ===")
+            logger.info(f"Data collection: {metrics.get_summary()}")
+            logger.info(f"PDF downloads: {pdf_stats}")
+            logger.info(f"PDF parsing: {parse_stats}")
+
+        logger.info("\n📊 Pipeline completed successfully!")
         logger.info("📁 Results saved in:")
-        logger.info("   - data/csv/empresas.csv")
-        logger.info("   - data/csv/cadri_documentos.csv")
-        logger.info("\n⚠️  Next steps:")
-        logger.info("   1. Use interactive_pdf_downloader.py to download PDFs")
-        logger.info("   2. Use pdf_parser_standalone.py to parse downloaded PDFs")
+        logger.info("   - data/csv/empresas.csv (company data)")
+        logger.info("   - data/csv/cadri_documentos.csv (document metadata)")
+        logger.info("   - data/csv/cadri_itens.csv (waste item details)")
+        logger.info("   - data/pdf/ (downloaded PDFs)")
 
     async def run_stage(self, stage: str, **kwargs):
         """Run a specific stage"""
@@ -212,6 +291,12 @@ class Pipeline:
 
         elif stage == 'detail':
             self.stage_detail()
+
+        elif stage == 'pdf':
+            await self.stage_pdf()
+
+        elif stage == 'parse':
+            self.stage_parse()
 
         elif stage == 'all':
             max_iter = kwargs.get('max_iterations', 5)
@@ -228,9 +313,9 @@ def main():
 
     parser.add_argument(
         '--stage',
-        choices=['list', 'detail', 'all'],
+        choices=['list', 'detail', 'pdf', 'parse', 'all'],
         default='all',
-        help='Pipeline stage to run (list, detail, or all)'
+        help='Pipeline stage to run (list, detail, pdf, parse, or all)'
     )
 
     parser.add_argument(
