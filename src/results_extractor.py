@@ -664,10 +664,10 @@ class ResultsPageExtractor:
                 logger.debug(f"Found PDF URL in cell: {pdf_url}")
                 break
 
-        # Fallback: Generate PDF URL if not found in links and we have document number
-        if not doc.url_pdf and doc.numero_documento and doc.tipo_documento:
-            doc.url_pdf = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn=12&ndocmn={doc.numero_documento}"
-            logger.debug(f"Generated fallback PDF URL: {doc.url_pdf}")
+        # No fallback generation - only use real URLs from HTML
+        if not doc.url_pdf:
+            logger.debug(f"No PDF URL found in HTML for document {doc.numero_documento}")
+            doc.url_pdf = ""  # Keep empty if no real link exists
 
         # Parse dates
         if doc.data_sd:
@@ -704,15 +704,21 @@ class ResultsPageExtractor:
         return "DOCUMENTO"
 
     def _extract_pdf_url_from_cell(self, cell: Tag) -> Optional[str]:
-        """Extrai URL de PDF do link <a> dentro da célula, se existir"""
+        """Extrai APENAS URLs reais de PDF do HTML que apontam para autenticidade CETESB"""
         link = cell.find('a')
         if link and link.get('href'):
             url = link.get('href')
-            # Normalizar URL
-            url = url.replace('&amp;', '&')
-            if url.startswith('http://'):
-                url = url.replace('http://', 'https://')
-            return url
+
+            # Validar se é realmente um link de autenticidade CETESB
+            if 'autenticidade.cetesb' in url or 'autentica.php' in url:
+                # Normalizar URL
+                url = url.replace('&amp;', '&')
+                if url.startswith('http://'):
+                    url = url.replace('http://', 'https://')
+                logger.debug(f"Found valid CETESB PDF URL: {url}")
+                return url
+            else:
+                logger.debug(f"Ignoring non-CETESB URL: {url}")
         return None
 
     def _extract_document_flexible(self, row: Tag) -> DocumentData:
@@ -776,10 +782,10 @@ class ResultsPageExtractor:
             elif any(status in text.lower() for status in ['emitida', 'arquivada', 'pendente', 'cancelada']):
                 doc.situacao = text
 
-        # Fallback: Generate PDF URL if not found in links and we have document number
-        if not doc.url_pdf and doc.numero_documento and doc.tipo_documento:
-            doc.url_pdf = f"{BASE_URL_AUTENTICIDADE}/autentica.php?idocmn=12&ndocmn={doc.numero_documento}"
-            logger.debug(f"Generated fallback PDF URL: {doc.url_pdf}")
+        # No fallback generation - only use real URLs from HTML
+        if not doc.url_pdf:
+            logger.debug(f"No PDF URL found in HTML for document {doc.numero_documento}")
+            doc.url_pdf = ""  # Keep empty if no real link exists
 
         return doc
 

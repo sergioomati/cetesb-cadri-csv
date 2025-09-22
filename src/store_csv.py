@@ -187,15 +187,17 @@ def hash_file(file_path: Path) -> str:
 
 
 def get_pending_pdfs() -> List[Dict[str, str]]:
-    """Get list of PDFs that need to be downloaded"""
+    """Get list of PDFs that need to be downloaded (only those with valid URLs)"""
     from config import CSV_CADRI_DOCS
 
     df = CSVStore.load_csv(CSV_CADRI_DOCS)
 
-    # Filter where status_pdf is not 'downloaded'
+    # Filter where status_pdf is not 'downloaded' AND has valid URL
     pending = df[
-        (df['status_pdf'].isna()) |
-        (df['status_pdf'] != 'downloaded')
+        ((df['status_pdf'].isna()) | (df['status_pdf'] != 'downloaded')) &
+        (df['url_pdf'].notna()) &
+        (df['url_pdf'] != '') &
+        (df['url_pdf'].str.contains('autenticidade.cetesb', na=False))
     ]
 
     return pending[['numero_documento', 'url_pdf']].to_dict('records')
