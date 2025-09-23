@@ -18,6 +18,10 @@ python -m src.pipeline --stage all
 # Individual stages
 python -m src.pipeline --stage list --seeds CEM,AGR,BIO
 python -m src.pipeline --stage detail
+
+# CNPJ-based extraction (NEW)
+python -m src.pipeline --stage all --cnpj-file empresas.xlsx
+python -m src.pipeline --stage list --cnpj-file lista_cnpjs.xlsx
 ```
 
 ### PDF Management
@@ -66,10 +70,12 @@ mypy src/
 4. **Parse** → Extract 15 structured fields from PDFs using PyMuPDF
 
 ### Key Components
-- **src/pipeline.py**: Main orchestrator
+- **src/pipeline.py**: Main orchestrator with CNPJ support
+- **src/cnpj_loader.py**: XLSX CNPJ loader and validator
+- **src/scrape_list.py**: Company search (seeds + CNPJs)
 - **cert_mov_direct_downloader.py**: Primary PDF downloader
 - **interactive_pdf_downloader.py**: Fallback downloader
-- **pdf_parser_standalone.py**: Enhanced PDF parser (15 fields)
+- **pdf_parser_standalone.py**: Enhanced PDF parser (47 fields)
 - **src/store_csv.py**: CSV persistence with deduplication
 
 ## Data Output
@@ -112,7 +118,20 @@ Environment variables in `.env`:
 
 ## Important Notes
 
-- **No CNPJ substring search**: Requires exact CNPJ matches
-- **Corporate stopwords blocked**: "LTDA", "ME", "EPP" don't return results
+- **CNPJ search support**: Direct CNPJ search via XLSX input files
+- **XLSX format**: Requires "cnpj" column with 14-digit CNPJs
+- **Corporate stopwords blocked**: "LTDA", "ME", "EPP" don't return results in text search
 - **PDF structure dependency**: Parsing relies on consistent PDF layouts
 - **Rate limiting required**: Must respect server limits to avoid blocks
+
+## CNPJ File Format
+
+Create XLSX file with structure:
+```
+cnpj
+11222333000181
+44555666000199
+77888999000155
+```
+
+Usage: `python -m src.pipeline --stage all --cnpj-file empresas.xlsx`

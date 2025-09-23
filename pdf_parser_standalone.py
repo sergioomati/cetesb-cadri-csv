@@ -34,6 +34,15 @@ class PDFParserStandalone:
             'skipped': 0
         }
 
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup"""
+        # Cleanup if needed (currently no resources to cleanup)
+        pass
+
     def _compile_patterns(self) -> Dict[str, re.Pattern]:
         """Compilar regex patterns para extração"""
         return {
@@ -148,6 +157,31 @@ class PDFParserStandalone:
             # Padrões de limpeza de texto
             'clean_spaces': re.compile(r'\s+'),
             'clean_breaks': re.compile(r'[\n\r]+'),
+
+            # Padrões para entidade geradora (formato flexível para segunda página)
+            'entidade_geradora': re.compile(
+                r'autenticidade\.cetesb\.sp\.gov\.br\s*\n\s*([^\n]+?)\s+(\d+-\d+-\d+)\s*\n'
+                r'([^\n]+?)\s*\n\s*([^\n]+?)\s*\n'
+                r'([^\n]+?)\s+([\d-]+)\s+([^\n]+?)\s*\n'
+                r'([^\n]+?)\s*\n'
+                r'([^\n]+?)\s+(\d+)',
+                re.DOTALL | re.IGNORECASE
+            ),
+
+            # Padrões para entidade de destinação (formato flexível)
+            'entidade_destinacao': re.compile(
+                r'(\d+)\s*\n([^\n]+?)\s+(\d+-\d+-\d+)\s*\n'
+                r'([^\n]+?)\s+(\d+)(?:\s+([^\n]+?))?\s*\n'
+                r'([^\n]+?)\s+([\d-]+)\s+([^\n]+?)\s*\n'
+                r'([^\n]+?)\s*\n'
+                r'([^\n]+?)\s+(\d+)\s+([\d/]+)',
+                re.DOTALL | re.IGNORECASE
+            ),
+
+            # Dados do cabeçalho do documento
+            'processo_numero': re.compile(r'Processo\s+N[°º]\s*\n\s*(\d+/\d+/\d+)', re.IGNORECASE),
+            'certificado_numero': re.compile(r'N[°º]\s+(\d{8})', re.IGNORECASE),
+            'versao_data': re.compile(r'Versão:\s*(\d+)\s*\n\s*Data:\s*([\d/]+)', re.IGNORECASE),
         }
 
     def _load_parsed_cache(self) -> set:
@@ -193,12 +227,21 @@ class PDFParserStandalone:
                 # Extrair data de validade
                 validade = self._extract_date(full_text, 'validade')
 
+                # Extrair metadados do documento (entidades, processo, etc.)
+                metadata = self._extract_document_metadata(full_text)
+                logger.info(f"DEBUG parse_pdf: Metadados extraídos com {len(metadata)} campos")
+                if metadata.get('geradora_nome'):
+                    logger.info(f"DEBUG parse_pdf: geradora_nome = '{metadata.get('geradora_nome')}'")
+                else:
+                    logger.info("DEBUG parse_pdf: geradora_nome NÃO foi extraído")
+
                 # Tentar extração com nova lógica estruturada primeiro
                 items = self._extract_residuos_enhanced(
                     full_text,
                     numero_documento,
                     doc_type,
-                    validade
+                    validade,
+                    metadata
                 )
 
                 logger.debug(f"Enhanced parsing found {len(items)} items for {numero_documento}")
@@ -212,7 +255,8 @@ class PDFParserStandalone:
                             residuos_section,
                             numero_documento,
                             doc_type,
-                            validade
+                            validade,
+                            metadata
                         )
                     else:
                         logger.debug(f"Structured approach failed, trying alternative for {numero_documento}")
@@ -220,7 +264,8 @@ class PDFParserStandalone:
                             full_text,
                             numero_documento,
                             doc_type,
-                            validade
+                            validade,
+                            metadata
                         )
 
                 # Validar e limpar itens extraídos
@@ -236,10 +281,10 @@ class PDFParserStandalone:
 
     def _clean_text(self, text: str) -> str:
         """Limpar e normalizar texto"""
-        # Normalizar espaços
-        text = self.patterns['clean_spaces'].sub(' ', text)
-        # Normalizar quebras de linha
-        text = self.patterns['clean_breaks'].sub('\n', text)
+        # Normalizar espaços múltiplos mas manter quebras de linha
+        text = re.sub(r'[ \t]+', ' ', text)  # Só espaços e tabs, não quebras
+        # Normalizar quebras de linha múltiplas
+        text = re.sub(r'\n{3,}', '\n\n', text)  # Máximo 2 quebras seguidas
         return text.strip()
 
     def _identify_doc_type(self, text: str) -> Optional[str]:
@@ -302,7 +347,8 @@ class PDFParserStandalone:
         section: str,
         numero_documento: str,
         doc_type: str,
-        validade: Optional[str]
+        validade: Optional[str],
+        metadata: Dict[str, str] = None
     ) -> List[Dict]:
         """Extrair resíduos de uma seção estruturada"""
         items = []
@@ -364,7 +410,8 @@ class PDFParserStandalone:
         text: str,
         numero_documento: str,
         doc_type: str,
-        validade: Optional[str]
+        validade: Optional[str],
+        metadata: Dict[str, str] = None
     ) -> List[Dict]:
         """Extração alternativa quando não há seção clara"""
         items = []
@@ -454,12 +501,100 @@ class PDFParserStandalone:
             'data_extracao': datetime.now().isoformat()
         }
 
+    def _extract_document_metadata(self, text: str) -> Dict[str, str]:
+        """Extrair metadados do documento (entidades, processo, etc.)"""
+        metadata = {}
+
+        # Extrair dados da entidade geradora (padrão simplificado)
+        geradora_match = self.patterns['entidade_geradora'].search(text)
+        if geradora_match:
+            # Grupos: 1=nome, 2=cadastro, 3=logradouro, 4=numero/complemento,
+            # 5=bairro, 6=cep, 7=municipio, 8=atividade, 9=bacia, 10=funcionarios
+
+            # Processar logradouro e número
+            logradouro_completo = geradora_match.group(3).strip()
+            numero_complemento = geradora_match.group(4).strip()
+
+            # Separar número e complemento se necessário
+            numero_parts = numero_complemento.split(None, 1)
+            numero = numero_parts[0] if numero_parts else ''
+            complemento = numero_parts[1] if len(numero_parts) > 1 else ''
+
+            metadata.update({
+                'geradora_nome': geradora_match.group(1).strip(),
+                'geradora_cadastro_cetesb': geradora_match.group(2),
+                'geradora_logradouro': logradouro_completo,
+                'geradora_numero': numero,
+                'geradora_complemento': complemento,
+                'geradora_bairro': geradora_match.group(5).strip(),
+                'geradora_cep': geradora_match.group(6),
+                'geradora_municipio': geradora_match.group(7).strip(),
+                'geradora_atividade': geradora_match.group(8).strip(),
+                'geradora_bacia_hidrografica': geradora_match.group(9).strip(),
+                'geradora_funcionarios': geradora_match.group(10),
+                'geradora_uf': 'SP'
+            })
+
+            logger.debug(f"Entidade geradora encontrada: {metadata['geradora_nome']}")
+
+        # Extrair dados da entidade de destinação
+        # Procurar padrão após a entidade geradora
+        destino_start = text.find('LEANDRO RAMIRES')
+        if destino_start > 0:
+            destino_section = text[destino_start-20:destino_start+500]
+            destino_match = self.patterns['entidade_destinacao'].search(destino_section)
+
+            if destino_match:
+                # Grupos: 1=funcionarios_geradora, 2=nome, 3=cadastro, 4=logradouro,
+                # 5=numero, 6=complemento, 7=bairro, 8=cep, 9=municipio,
+                # 10=atividade, 11=bacia, 12=licenca, 13=data_licenca
+
+                metadata.update({
+                    'destino_entidade_nome': destino_match.group(2).strip(),
+                    'destino_entidade_cadastro_cetesb': destino_match.group(3),
+                    'destino_entidade_logradouro': destino_match.group(4).strip(),
+                    'destino_entidade_numero': destino_match.group(5),
+                    'destino_entidade_complemento': destino_match.group(6).strip() if destino_match.group(6) else '',
+                    'destino_entidade_bairro': destino_match.group(7).strip(),
+                    'destino_entidade_cep': destino_match.group(8),
+                    'destino_entidade_municipio': destino_match.group(9).strip(),
+                    'destino_entidade_atividade': destino_match.group(10).strip(),
+                    'destino_entidade_bacia_hidrografica': destino_match.group(11).strip(),
+                    'destino_entidade_licenca': destino_match.group(12),
+                    'destino_entidade_data_licenca': destino_match.group(13),
+                    'destino_entidade_uf': 'SP'
+                })
+
+                logger.debug(f"Entidade de destinação encontrada: {metadata['destino_entidade_nome']}")
+
+        # Extrair número do processo
+        processo_match = self.patterns['processo_numero'].search(text)
+        if processo_match:
+            metadata['numero_processo'] = processo_match.group(1)
+            logger.debug(f"Número do processo: {metadata['numero_processo']}")
+
+        # Extrair número do certificado
+        cert_match = self.patterns['certificado_numero'].search(text)
+        if cert_match:
+            metadata['numero_certificado'] = cert_match.group(1)
+            logger.debug(f"Número do certificado: {metadata['numero_certificado']}")
+
+        # Extrair versão e data do documento
+        versao_data_match = self.patterns['versao_data'].search(text)
+        if versao_data_match:
+            metadata['versao_documento'] = versao_data_match.group(1)
+            metadata['data_documento'] = versao_data_match.group(2)
+            logger.debug(f"Versão: {metadata['versao_documento']}, Data: {metadata['data_documento']}")
+
+        return metadata
+
     def _extract_residuos_enhanced(
         self,
         text: str,
         numero_documento: str,
         doc_type: str,
-        validade: Optional[str]
+        validade: Optional[str],
+        metadata: Dict[str, str] = None
     ) -> List[Dict]:
         """
         Extração melhorada baseada na estrutura identificada na imagem
@@ -512,8 +647,17 @@ class PDFParserStandalone:
 
             # Criar item completo
             complete_item = self._create_enhanced_item_dict(
-                item_data, numero_documento, doc_type, validade
+                item_data, numero_documento, doc_type, validade, metadata
             )
+
+            # Debug: verificar se metadata está sendo passado
+            if item_numero == '01':
+                logger.info(f"DEBUG: metadata is None? {metadata is None}")
+                if metadata:
+                    logger.info(f"DEBUG: Metadata tem {len(metadata)} campos")
+                    logger.info(f"DEBUG: geradora_nome em metadata: '{metadata.get('geradora_nome', 'NAO ENCONTRADO')}'")
+                if complete_item:
+                    logger.info(f"DEBUG: geradora_nome no item: '{complete_item.get('geradora_nome', 'NAO ENCONTRADO')}'")
 
             if complete_item:
                 items.append(complete_item)
@@ -613,7 +757,8 @@ class PDFParserStandalone:
         item_data: Dict,
         numero_documento: str,
         doc_type: str,
-        validade: Optional[str]
+        validade: Optional[str],
+        metadata: Dict[str, str] = None
     ) -> Optional[Dict]:
         """Criar dicionário de item com novos campos expandidos"""
 
@@ -621,7 +766,7 @@ class PDFParserStandalone:
         if not item_data.get('numero_residuo') or not item_data.get('descricao_residuo'):
             return None
 
-        return {
+        result = {
             'numero_documento': numero_documento,
             'item_numero': item_data.get('item_numero', '01'),
             'numero_residuo': item_data.get('numero_residuo', ''),
@@ -642,8 +787,80 @@ class PDFParserStandalone:
             'raw_fragment': item_data.get('raw_fragment', ''),
             'tipo_documento': doc_type,
             'data_validade': validade,
-            'updated_at': datetime.now().isoformat()
         }
+
+        # Adicionar metadados se disponíveis
+        if metadata is not None:
+            # Dados da entidade geradora
+            result.update({
+                'geradora_nome': metadata.get('geradora_nome', ''),
+                'geradora_cadastro_cetesb': metadata.get('geradora_cadastro_cetesb', ''),
+                'geradora_logradouro': metadata.get('geradora_logradouro', ''),
+                'geradora_numero': metadata.get('geradora_numero', ''),
+                'geradora_complemento': metadata.get('geradora_complemento', ''),
+                'geradora_bairro': metadata.get('geradora_bairro', ''),
+                'geradora_cep': metadata.get('geradora_cep', ''),
+                'geradora_municipio': metadata.get('geradora_municipio', ''),
+                'geradora_uf': metadata.get('geradora_uf', ''),
+                'geradora_atividade': metadata.get('geradora_atividade', ''),
+                'geradora_bacia_hidrografica': metadata.get('geradora_bacia_hidrografica', ''),
+                'geradora_funcionarios': metadata.get('geradora_funcionarios', ''),
+                # Dados da entidade de destinação
+                'destino_entidade_nome': metadata.get('destino_entidade_nome', ''),
+                'destino_entidade_cadastro_cetesb': metadata.get('destino_entidade_cadastro_cetesb', ''),
+                'destino_entidade_logradouro': metadata.get('destino_entidade_logradouro', ''),
+                'destino_entidade_numero': metadata.get('destino_entidade_numero', ''),
+                'destino_entidade_complemento': metadata.get('destino_entidade_complemento', ''),
+                'destino_entidade_bairro': metadata.get('destino_entidade_bairro', ''),
+                'destino_entidade_cep': metadata.get('destino_entidade_cep', ''),
+                'destino_entidade_municipio': metadata.get('destino_entidade_municipio', ''),
+                'destino_entidade_uf': metadata.get('destino_entidade_uf', ''),
+                'destino_entidade_atividade': metadata.get('destino_entidade_atividade', ''),
+                'destino_entidade_bacia_hidrografica': metadata.get('destino_entidade_bacia_hidrografica', ''),
+                'destino_entidade_licenca': metadata.get('destino_entidade_licenca', ''),
+                'destino_entidade_data_licenca': metadata.get('destino_entidade_data_licenca', ''),
+                # Dados do documento
+                'numero_processo': metadata.get('numero_processo', ''),
+                'numero_certificado': metadata.get('numero_certificado', ''),
+                'versao_documento': metadata.get('versao_documento', ''),
+                'data_documento': metadata.get('data_documento', ''),
+            })
+        else:
+            # Adicionar campos vazios para manter consistência do schema
+            result.update({
+                'geradora_nome': '',
+                'geradora_cadastro_cetesb': '',
+                'geradora_logradouro': '',
+                'geradora_numero': '',
+                'geradora_complemento': '',
+                'geradora_bairro': '',
+                'geradora_cep': '',
+                'geradora_municipio': '',
+                'geradora_uf': '',
+                'geradora_atividade': '',
+                'geradora_bacia_hidrografica': '',
+                'geradora_funcionarios': '',
+                'destino_entidade_nome': '',
+                'destino_entidade_cadastro_cetesb': '',
+                'destino_entidade_logradouro': '',
+                'destino_entidade_numero': '',
+                'destino_entidade_complemento': '',
+                'destino_entidade_bairro': '',
+                'destino_entidade_cep': '',
+                'destino_entidade_municipio': '',
+                'destino_entidade_uf': '',
+                'destino_entidade_atividade': '',
+                'destino_entidade_bacia_hidrografica': '',
+                'destino_entidade_licenca': '',
+                'destino_entidade_data_licenca': '',
+                'numero_processo': '',
+                'numero_certificado': '',
+                'versao_documento': '',
+                'data_documento': '',
+            })
+
+        result['updated_at'] = datetime.now().isoformat()
+        return result
 
     def validate_extraction(self, items: List[Dict]) -> List[Dict]:
         """Validar e limpar dados extraídos"""
@@ -913,6 +1130,10 @@ def main():
         logger.info(f"   📈 Média de itens por PDF: {media_itens:.1f}")
 
     return stats
+
+
+# Alias for backward compatibility with pipeline imports
+PDFParser = PDFParserStandalone
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+2025-09-22 22:41:30 - cetesb_scraper - INFO - ======================================================================
+2025-09-22 22:41:30 - cetesb_scraper - INFO - PDF Parser Standalone - Extração Aprimorada de Dados de Resíduos
+2025-09-22 22:41:30 - cetesb_scraper - INFO - Documento: 12130010470125102024
+2025-09-22 22:41:30 - cetesb_scraper - INFO - ======================================================================
+2025-09-22 22:41:30 - cetesb_scraper - INFO - DEBUG parse_pdf: Metadados extraídos com 27 campos
+2025-09-22 22:41:30 - cetesb_scraper - INFO - DEBUG parse_pdf: geradora_nome = 'NESTLE BRASIL LTDA'
+2025-09-22 22:41:30 - cetesb_scraper - INFO - DEBUG: metadata is None? False
+2025-09-22 22:41:30 - cetesb_scraper - INFO - DEBUG: Metadata tem 27 campos
+2025-09-22 22:41:30 - cetesb_scraper - INFO - DEBUG: geradora_nome em metadata: 'NESTLE BRASIL LTDA'
+2025-09-22 22:41:30 - cetesb_scraper - INFO - DEBUG: geradora_nome no item: 'NESTLE BRASIL LTDA'
+2025-09-22 22:41:30 - cetesb_scraper - INFO - Created CSV: C:\Users\sergi\OneDrive\Documentos\Github\cetesb_cadri_csv\data\csv\cadri_itens.csv
+2025-09-22 22:41:30 - cetesb_scraper - INFO - Saved 3 new records to cadri_itens.csv
+2025-09-22 22:41:30 - cetesb_scraper - INFO - ======================================================================
+2025-09-22 22:41:30 - cetesb_scraper - INFO -    PDFs processados: 1
+2025-09-22 22:41:30 - cetesb_scraper - INFO -    Itens extraídos: 3
+2025-09-22 22:41:30 - cetesb_scraper - INFO -    Sem itens: 0
+2025-09-22 22:41:30 - cetesb_scraper - INFO -    Erros: 0
+2025-09-22 22:41:30 - cetesb_scraper - INFO - ======================================================================

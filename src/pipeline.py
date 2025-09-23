@@ -54,36 +54,54 @@ class Pipeline:
             self.seed_manager.save_state()
             logger.info(f"Checkpoint saved at {self.checkpoint_counter} operations")
 
-    async def stage_list(self, seeds: list = None, max_seeds: int = 10):
+    async def stage_list(self, seeds: list = None, cnpjs: list = None, max_seeds: int = 10):
         """Stage 1: Search for companies and get detail page URLs"""
         logger.info("=== Starting Stage 1: List Scraping ===")
-
-        if seeds:
-            # Use provided seeds
-            seed_list = seeds
-        else:
-            # Get seeds from manager
-            seed_list = self.adaptive_strategy.get_adaptive_seeds(max_seeds)
-
-        if not seed_list:
-            logger.warning("No seeds available for search")
-            return []
 
         scraper = ListScraper(self.seed_manager)
         all_urls = []
 
-        for seed in seed_list:
+        if cnpjs:
+            # Use CNPJ list (priority over seeds)
+            logger.info(f"Searching by {len(cnpjs)} CNPJs")
+            search_list = cnpjs
+            search_method = 'cnpj'
+        elif seeds:
+            # Use provided seeds
+            logger.info(f"Searching by {len(seeds)} seeds")
+            search_list = seeds
+            search_method = 'seed'
+        else:
+            # Get seeds from manager
+            search_list = self.adaptive_strategy.get_adaptive_seeds(max_seeds)
+            search_method = 'seed'
+
+        if not search_list:
+            logger.warning("No search terms available")
+            return []
+
+        for search_term in search_list:
             if not self.running:
                 break
 
-            results = await scraper.search_by_razao_social(seed)
-            urls = [r['url'] for r in results]
-            all_urls.extend(urls)
+            if search_method == 'cnpj':
+                results = await scraper.search_by_cnpj(search_term)
+            else:
+                results = await scraper.search_by_razao_social(search_term)
 
-            # Log performance for adaptive strategy
-            self.adaptive_strategy.log_performance(
-                seed, len(results), 10.0  # placeholder time
-            )
+            # Store original results for CSV (with metadata)
+            # But extract URLs for detail scraping pipeline
+            for r in results:
+                if isinstance(r, dict):
+                    all_urls.append(r)  # Keep full dict for CSV
+                else:
+                    all_urls.append({'url': r})  # Convert string to dict for CSV
+
+            # Log performance for adaptive strategy (only for seeds)
+            if search_method == 'seed':
+                self.adaptive_strategy.log_performance(
+                    search_term, len(results), 10.0  # placeholder time
+                )
 
             self.checkpoint()
 
@@ -150,8 +168,16 @@ class Pipeline:
 
         logger.info(f"Processing {len(urls)} URLs that need detail scraping")
 
+        # Extract URL strings from dicts if needed (for CNPJ search results)
+        url_strings = []
+        for url_item in urls:
+            if isinstance(url_item, dict):
+                url_strings.append(url_item.get('url', url_item))
+            else:
+                url_strings.append(url_item)
+
         with DetailScraper() as scraper:
-            total_docs = scraper.process_url_list(urls)
+            total_docs = scraper.process_url_list(url_strings)
 
         self.checkpoint()
         return total_docs
@@ -223,12 +249,17 @@ class Pipeline:
         return stats
 
 
-    async def run_all(self, max_iterations: int = 5):
+    async def run_all(self, max_iterations: int = 5, cnpjs: list = None):
         """Run complete pipeline (all stages)"""
         logger.info("=== Starting Complete CADRI Pipeline ===")
         CSVSchemas.init_all()
 
         total_docs = 0
+
+        # For CNPJ mode, we typically only need one iteration since we have specific targets
+        if cnpjs:
+            logger.info(f"Running in CNPJ mode with {len(cnpjs)} CNPJs")
+            max_iterations = 1
 
         for iteration in range(1, max_iterations + 1):
             if not self.running:
@@ -237,7 +268,12 @@ class Pipeline:
             logger.info(f"\n--- Iteration {iteration}/{max_iterations} ---")
 
             # Stage 1: List scraping
-            urls = await self.stage_list()
+            if cnpjs and iteration == 1:
+                # Use CNPJs on first iteration
+                urls = await self.stage_list(cnpjs=cnpjs)
+            else:
+                # Use regular seed-based approach
+                urls = await self.stage_list()
 
             if not urls:
                 logger.info("No more URLs found, stopping")
@@ -285,9 +321,10 @@ class Pipeline:
 
         if stage == 'list':
             seeds = kwargs.get('seeds', [])
+            cnpjs = kwargs.get('cnpjs', [])
             if isinstance(seeds, str):
                 seeds = [s.strip() for s in seeds.split(',')]
-            await self.stage_list(seeds)
+            await self.stage_list(seeds=seeds, cnpjs=cnpjs)
 
         elif stage == 'detail':
             self.stage_detail()
@@ -300,7 +337,8 @@ class Pipeline:
 
         elif stage == 'all':
             max_iter = kwargs.get('max_iterations', 5)
-            await self.run_all(max_iter)
+            cnpjs = kwargs.get('cnpjs', [])
+            await self.run_all(max_iter, cnpjs=cnpjs)
 
         else:
             logger.error(f"Unknown stage: {stage}")
@@ -322,6 +360,12 @@ def main():
         '--seeds',
         type=str,
         help='Comma-separated seeds for list stage (e.g., CEM,ACE,AGR)'
+    )
+
+    parser.add_argument(
+        '--cnpj-file',
+        type=str,
+        help='XLSX file with CNPJ list (column "cnpj" expected)'
     )
 
     parser.add_argument(
@@ -371,12 +415,35 @@ def main():
         pipeline.seed_manager.reset_queue()
         logger.info("Seed state reset")
 
+    # Load CNPJs from file if provided
+    cnpjs = []
+    cnpj_file = getattr(args, 'cnpj_file', None)
+    if cnpj_file:
+        try:
+            from cnpj_loader import load_cnpjs, validate_cnpj_file
+            from pathlib import Path
+
+            cnpj_file_path = Path(cnpj_file)
+
+            # Validate file first
+            if validate_cnpj_file(str(cnpj_file_path)):
+                cnpjs = load_cnpjs(str(cnpj_file_path))
+                logger.info(f"Loaded {len(cnpjs)} CNPJs from {cnpj_file_path}")
+            else:
+                logger.error(f"Invalid CNPJ file: {cnpj_file_path}")
+                sys.exit(1)
+
+        except Exception as e:
+            logger.error(f"Error loading CNPJ file: {e}")
+            sys.exit(1)
+
     # Run pipeline
     try:
         asyncio.run(
             pipeline.run_stage(
                 args.stage,
                 seeds=args.seeds,
+                cnpjs=cnpjs,
                 max_iterations=args.max_iterations
             )
         )

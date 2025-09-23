@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import List, Dict
 from urllib.parse import urljoin
 import time
@@ -17,6 +18,7 @@ class ListScraper:
     # Form selectors
     FORM_SELECTORS = {
         'razao_social': 'input[name="razao"]',
+        'cnpj': 'input[name="cgc"]',  # CETESB usa campo 'cgc' (Cadastro Geral de Contribuintes) para CNPJ
         'municipio': 'input[name="municipio"]',
         'submit': 'input[type="submit"]'
     }
@@ -110,6 +112,258 @@ class ListScraper:
                 self.seed_manager.seed_queue.append(r)
 
         logger.info(f"Seed '{seed}': {len(results)} links in {elapsed:.1f}s")
+        return results
+
+    async def search_by_cnpj(self, cnpj: str) -> List[Dict[str, str]]:
+        """
+        Search by CNPJ
+
+        Args:
+            cnpj: CNPJ string (should be 14 digits)
+
+        Returns:
+            List of process links
+        """
+        # Validar CNPJ (deve ter 14 dígitos)
+        clean_cnpj = re.sub(r'[^\d]', '', cnpj.strip())
+        if len(clean_cnpj) != 14:
+            logger.warning(f"CNPJ inválido: '{cnpj}' (deve ter 14 dígitos)")
+            return []
+
+        # DEBUG_CNPJ: Log detalhado do início da busca
+        logger.info(f"[DEBUG_CNPJ] Iniciando busca por CNPJ: original='{cnpj}', limpo='{clean_cnpj}'")
+
+        results = []
+        start_time = time.time()
+
+        try:
+            async with self.browser_manager as browser:
+                page = await browser.new_page()
+
+                # Navigate to search page
+                await page.goto(self.SEARCH_URL, wait_until='networkidle')
+                logger.debug(f"Loaded search page for CNPJ: {clean_cnpj}")
+
+                # DEBUG_CNPJ: Screenshot da página inicial
+                from pathlib import Path
+                debug_dir = Path("data/debug")
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                await page.screenshot(path=str(debug_dir / f"DEBUG_CNPJ_search_{clean_cnpj}_01_loaded.png"))
+
+                # DEBUG_CNPJ: Testar diferentes seletores para campo CNPJ
+                cnpj_selectors = [
+                    'input[name="cgc"]',   # Campo correto CETESB (Cadastro Geral de Contribuintes)
+                    'input[name="cnpj"]',  # Seletor padrão
+                    'input[id="cgc"]',
+                    'input[id="cnpj"]',
+                    '#cnpj',
+                    '#cgc',
+                    'input[placeholder*="cnpj" i]',
+                    'input[placeholder*="CNPJ"]',
+                    'input[name*="cnpj" i]',
+                    'input[id*="cnpj" i]'
+                ]
+
+                cnpj_field = None
+                working_selector = None
+                original_selector = self.FORM_SELECTORS['cnpj']  # Salvar seletor original
+
+                logger.info(f"[DEBUG_CNPJ] Testando {len(cnpj_selectors)} seletores para campo CNPJ...")
+                for idx, selector in enumerate(cnpj_selectors):
+                    try:
+                        test_field = await page.query_selector(selector)
+                        if test_field:
+                            is_visible = await test_field.is_visible()
+                            is_enabled = await test_field.is_enabled()
+                            field_attrs = await test_field.evaluate('el => ({name: el.name, id: el.id, type: el.type, placeholder: el.placeholder})')
+
+                            logger.info(f"[DEBUG_CNPJ] Seletor {idx+1} '{selector}': ✅ Encontrado - Visível: {is_visible}, Habilitado: {is_enabled}")
+                            logger.info(f"[DEBUG_CNPJ] Atributos do campo: {field_attrs}")
+
+                            if is_visible and is_enabled:
+                                cnpj_field = test_field
+                                working_selector = selector
+                                logger.info(f"[DEBUG_CNPJ] ✅ Usando seletor: '{selector}'")
+                                break
+                        else:
+                            logger.info(f"[DEBUG_CNPJ] Seletor {idx+1} '{selector}': ❌ Não encontrado")
+                    except Exception as e:
+                        logger.info(f"[DEBUG_CNPJ] Seletor {idx+1} '{selector}': ❌ Erro: {e}")
+
+                if not cnpj_field:
+                    logger.error(f"[DEBUG_CNPJ] Campo CNPJ não encontrado com nenhum seletor testado")
+
+                    # DEBUG_CNPJ: Listar todos os inputs disponíveis
+                    all_inputs = await page.evaluate("""
+                        () => {
+                            const inputs = Array.from(document.querySelectorAll('input'));
+                            return inputs.map(input => ({
+                                tagName: input.tagName,
+                                type: input.type,
+                                name: input.name,
+                                id: input.id,
+                                placeholder: input.placeholder,
+                                visible: !input.hidden && input.offsetParent !== null
+                            }));
+                        }
+                    """)
+                    logger.error(f"[DEBUG_CNPJ] Inputs disponíveis na página: {all_inputs}")
+                    return []
+
+                # DEBUG_CNPJ: Atualizar seletor se encontrou um melhor
+                if working_selector and working_selector != original_selector:
+                    logger.info(f"[DEBUG_CNPJ] ⚠️ Seletor original '{original_selector}' não funcionou")
+                    logger.info(f"[DEBUG_CNPJ] ✅ Usando seletor alternativo: '{working_selector}'")
+                    # Temporariamente atualizar o seletor para esta execução
+                    self.FORM_SELECTORS['cnpj'] = working_selector
+
+                # DEBUG_CNPJ: Testar diferentes formatos de CNPJ
+                cnpj_formats = [
+                    clean_cnpj,  # Sem formatação
+                    f"{clean_cnpj[:2]}.{clean_cnpj[2:5]}.{clean_cnpj[5:8]}/{clean_cnpj[8:12]}-{clean_cnpj[12:]}",  # Com formatação
+                ]
+
+                successful_format = None
+                for format_idx, cnpj_format in enumerate(cnpj_formats):
+                    logger.info(f"[DEBUG_CNPJ] Testando formato {format_idx + 1}: '{cnpj_format}'")
+
+                    # Limpar campo
+                    await cnpj_field.click()
+                    await cnpj_field.fill("")
+                    await asyncio.sleep(0.2)
+
+                    # Preencher com formato atual
+                    await cnpj_field.type(cnpj_format)
+                    await asyncio.sleep(0.3)
+
+                    # Verificar valor preenchido
+                    filled_value = await cnpj_field.input_value()
+                    logger.info(f"[DEBUG_CNPJ] Valor preenchido no campo (formato {format_idx + 1}): '{filled_value}'")
+
+                    # Disparar eventos JavaScript para este formato
+                    await page.evaluate(f"""
+                        () => {{
+                            const cnpjField = document.querySelector('{self.FORM_SELECTORS['cnpj']}');
+                            if (cnpjField) {{
+                                ['input', 'change', 'blur'].forEach(eventType => {{
+                                    const event = new Event(eventType, {{ bubbles: true }});
+                                    cnpjField.dispatchEvent(event);
+                                }});
+                            }}
+                        }}
+                    """)
+
+                    # Verificar se o campo aceita o formato (não foi limpo automaticamente)
+                    final_value = await cnpj_field.input_value()
+                    if final_value == cnpj_format or (final_value and len(final_value) >= 11):
+                        logger.info(f"[DEBUG_CNPJ] ✅ Formato {format_idx + 1} aceito pelo campo: '{final_value}'")
+                        successful_format = cnpj_format
+                        break
+                    else:
+                        logger.info(f"[DEBUG_CNPJ] ❌ Formato {format_idx + 1} rejeitado pelo campo")
+
+                if not successful_format:
+                    logger.error(f"[DEBUG_CNPJ] Nenhum formato de CNPJ foi aceito pelo campo")
+                    successful_format = clean_cnpj  # Usar formato limpo como fallback
+
+                # DEBUG_CNPJ: Screenshot após preenchimento
+                await page.screenshot(path=str(debug_dir / f"DEBUG_CNPJ_search_{clean_cnpj}_02_filled.png"))
+
+                # DEBUG_CNPJ: Disparar eventos JavaScript
+                await page.evaluate(f"""
+                    () => {{
+                        const cnpjField = document.querySelector('{self.FORM_SELECTORS['cnpj']}');
+                        if (cnpjField) {{
+                            ['input', 'change', 'blur'].forEach(eventType => {{
+                                const event = new Event(eventType, {{ bubbles: true }});
+                                cnpjField.dispatchEvent(event);
+                            }});
+                        }}
+                    }}
+                """)
+
+                # DEBUG_CNPJ: Verificar botão submit
+                submit_btn = await page.query_selector(self.FORM_SELECTORS['submit'])
+                if not submit_btn:
+                    logger.error(f"[DEBUG_CNPJ] Botão submit não encontrado com seletor: {self.FORM_SELECTORS['submit']}")
+                    return []
+
+                submit_visible = await submit_btn.is_visible()
+                submit_enabled = await submit_btn.is_enabled()
+                logger.info(f"[DEBUG_CNPJ] Botão submit - Visível: {submit_visible}, Habilitado: {submit_enabled}")
+
+                # Fill and submit form with CNPJ (usando formato aceito)
+                form_data = {
+                    self.FORM_SELECTORS['cnpj']: successful_format
+                }
+
+                # DEBUG_CNPJ: Submeter formulário
+                logger.info(f"[DEBUG_CNPJ] Submetendo formulário...")
+                success = await FormHelper.submit_form(
+                    page,
+                    form_data,
+                    self.FORM_SELECTORS['submit'],
+                    wait_for='table, .erro, .error'
+                )
+
+                # DEBUG_CNPJ: Screenshot após submissão
+                await page.screenshot(path=str(debug_dir / f"DEBUG_CNPJ_search_{clean_cnpj}_03_submitted.png"))
+
+                if not success:
+                    logger.error(f"[DEBUG_CNPJ] Failed to submit form for CNPJ: {clean_cnpj}")
+                    # DEBUG_CNPJ: Capturar HTML da página em caso de erro
+                    page_content = await page.content()
+                    debug_html_file = debug_dir / f"DEBUG_CNPJ_error_{clean_cnpj}.html"
+                    with open(debug_html_file, 'w', encoding='utf-8') as f:
+                        f.write(page_content)
+                    logger.info(f"[DEBUG_CNPJ] HTML da página salvo em: {debug_html_file}")
+                    return []
+
+                # Check for no results
+                error_element = await page.query_selector('.erro, .error, :has-text("nenhum resultado")')
+                if error_element:
+                    logger.info(f"[DEBUG_CNPJ] No results for CNPJ: {clean_cnpj}")
+                    error_text = await error_element.inner_text()
+                    logger.info(f"[DEBUG_CNPJ] Texto do erro: '{error_text}'")
+                    return []
+
+                # DEBUG_CNPJ: Log sobre resultados encontrados
+                logger.info(f"[DEBUG_CNPJ] Formulário submetido com sucesso, extraindo links...")
+
+                # Extract links from all pages
+                results = await FormHelper.handle_pagination(
+                    page,
+                    self.NEXT_BUTTON_SELECTORS,
+                    MAX_PAGES,
+                    self._extract_process_links
+                )
+
+                # DEBUG_CNPJ: Screenshot final com resultados
+                await page.screenshot(path=str(debug_dir / f"DEBUG_CNPJ_search_{clean_cnpj}_04_results.png"))
+
+                # For CNPJ searches, we don't need to add discovered company names to seed manager
+                # since we're searching for specific companies
+
+        except Exception as e:
+            logger.error(f"[DEBUG_CNPJ] Error searching with CNPJ '{clean_cnpj}': {e}")
+            # DEBUG_CNPJ: Log stack trace completo
+            import traceback
+            logger.error(f"[DEBUG_CNPJ] Stack trace: {traceback.format_exc()}")
+
+        finally:
+            # DEBUG_CNPJ: Restaurar seletor original se foi alterado
+            if 'original_selector' in locals():
+                self.FORM_SELECTORS['cnpj'] = original_selector
+                logger.debug(f"[DEBUG_CNPJ] Seletor original restaurado: '{original_selector}'")
+
+        # Log performance
+        elapsed = time.time() - start_time
+        metrics.increment('searches')
+
+        # DEBUG_CNPJ: Log final detalhado
+        logger.info(f"[DEBUG_CNPJ] CNPJ '{clean_cnpj}': {len(results)} links in {elapsed:.1f}s")
+        logger.info(f"[DEBUG_CNPJ] Screenshots salvos em: data/debug/DEBUG_CNPJ_search_{clean_cnpj}_*.png")
+
         return results
 
     async def _extract_process_links(self, page) -> List[Dict[str, str]]:

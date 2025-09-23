@@ -174,6 +174,38 @@ class CSVSchemas:
         'raw_fragment',               # Fragmento de texto original
         'tipo_documento',             # Tipo do documento de origem
         'data_validade',              # Data de validade do documento
+        # Dados da Entidade Geradora
+        'geradora_nome',
+        'geradora_cadastro_cetesb',
+        'geradora_logradouro',
+        'geradora_numero',
+        'geradora_complemento',
+        'geradora_bairro',
+        'geradora_cep',
+        'geradora_municipio',
+        'geradora_uf',
+        'geradora_atividade',
+        'geradora_bacia_hidrografica',
+        'geradora_funcionarios',
+        # Dados da Entidade de Destinação
+        'destino_entidade_nome',
+        'destino_entidade_cadastro_cetesb',
+        'destino_entidade_logradouro',
+        'destino_entidade_numero',
+        'destino_entidade_complemento',
+        'destino_entidade_bairro',
+        'destino_entidade_cep',
+        'destino_entidade_municipio',
+        'destino_entidade_uf',
+        'destino_entidade_atividade',
+        'destino_entidade_bacia_hidrografica',
+        'destino_entidade_licenca',
+        'destino_entidade_data_licenca',
+        # Dados do Documento
+        'numero_processo',
+        'numero_certificado',
+        'versao_documento',
+        'data_documento',
         'updated_at'
     ]
 

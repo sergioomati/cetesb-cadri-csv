@@ -117,22 +117,103 @@ class FormHelper:
             True if successful
         """
         try:
+            # DEBUG_CNPJ: Log início da submissão
+            logger.debug(f"[DEBUG_CNPJ] FormHelper.submit_form iniciado com {len(form_data)} campos")
+
             # Fill form fields
             for selector, value in form_data.items():
+                # DEBUG_CNPJ: Log preenchimento de cada campo
+                logger.debug(f"[DEBUG_CNPJ] Preenchendo campo '{selector}' com valor '{value}'")
+
                 await FormHelper.clear_and_type(page, selector, value)
+
+                # DEBUG_CNPJ: Verificar se valor foi preenchido corretamente
+                field_element = await page.query_selector(selector)
+                if field_element:
+                    actual_value = await field_element.input_value()
+                    logger.debug(f"[DEBUG_CNPJ] Valor atual no campo '{selector}': '{actual_value}'")
+
+                    # DEBUG_CNPJ: Disparar eventos JavaScript adicionais
+                    await page.evaluate(f"""
+                        () => {{
+                            const field = document.querySelector('{selector}');
+                            if (field) {{
+                                // Simular interação humana completa
+                                field.focus();
+
+                                // Disparar eventos em sequência
+                                ['focus', 'input', 'change', 'blur'].forEach(eventType => {{
+                                    const event = new Event(eventType, {{
+                                        bubbles: true,
+                                        cancelable: true
+                                    }});
+                                    field.dispatchEvent(event);
+                                }});
+
+                                // Também tentar eventos de teclado
+                                const keyEvents = ['keydown', 'keyup'];
+                                keyEvents.forEach(eventType => {{
+                                    const event = new KeyboardEvent(eventType, {{
+                                        bubbles: true,
+                                        cancelable: true,
+                                        key: 'Tab'
+                                    }});
+                                    field.dispatchEvent(event);
+                                }});
+                            }}
+                        }}
+                    """)
+
                 await asyncio.sleep(0.2)  # Small delay between fields
 
+            # DEBUG_CNPJ: Verificar estado do formulário antes da submissão
+            logger.debug(f"[DEBUG_CNPJ] Verificando botão submit: '{submit_selector}'")
+            submit_element = await page.query_selector(submit_selector)
+            if submit_element:
+                is_visible = await submit_element.is_visible()
+                is_enabled = await submit_element.is_enabled()
+                logger.debug(f"[DEBUG_CNPJ] Botão submit - Visível: {is_visible}, Habilitado: {is_enabled}")
+
+            # DEBUG_CNPJ: Aguardar um momento para garantir que JS processou
+            await asyncio.sleep(0.5)
+
             # Submit
+            logger.debug(f"[DEBUG_CNPJ] Clicando em submit...")
             await page.click(submit_selector)
+
+            # DEBUG_CNPJ: Aguardar navegação/mudança de estado
+            logger.debug(f"[DEBUG_CNPJ] Aguardando resposta do servidor...")
 
             # Wait for response
             if wait_for:
                 await page.wait_for_selector(wait_for, timeout=10000)
+                logger.debug(f"[DEBUG_CNPJ] Seletor '{wait_for}' encontrado - submissão bem-sucedida")
 
             return True
 
         except Exception as e:
-            logger.error(f"Form submission failed: {e}")
+            # DEBUG_CNPJ: Log de erro detalhado
+            logger.error(f"[DEBUG_CNPJ] Form submission failed: {e}")
+
+            # DEBUG_CNPJ: Capturar estado atual da página em caso de erro
+            try:
+                current_url = page.url
+                logger.error(f"[DEBUG_CNPJ] URL atual: {current_url}")
+
+                # Verificar se há erros JavaScript na página
+                js_errors = await page.evaluate("""
+                    () => {
+                        // Capturar erros JavaScript se houver
+                        const errors = window._jsErrors || [];
+                        return errors;
+                    }
+                """)
+                if js_errors:
+                    logger.error(f"[DEBUG_CNPJ] Erros JavaScript detectados: {js_errors}")
+
+            except Exception as debug_e:
+                logger.error(f"[DEBUG_CNPJ] Erro durante debug: {debug_e}")
+
             return False
 
     @staticmethod
