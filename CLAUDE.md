@@ -1,149 +1,106 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with this CETESB CADRI data extraction project.
 
-## Development Commands
+## Project Objective
 
-### Testing
+Extract **two structured data tables**:
+1. **Company data** (`empresas.csv`) - Cadastral information from CETESB site
+2. **Technical data** (`cadri_itens.csv`) - Detailed waste information from CADRI documents (15 structured fields)
+
+## Essential Commands
+
+### Main Pipeline
 ```bash
-# Run all tests
-pytest
-
-# Run tests with coverage
-pytest --cov=src --cov-report=html
-
-# Run specific test
-pytest tests/test_seeds.py -v
-
-# Run by marker
-pytest -m unit
-pytest -m integration
-pytest -m slow
-```
-
-### Code Quality
-```bash
-# Format code
-black src/ tests/
-
-# Lint
-flake8 src/ tests/
-
-# Type checking
-mypy src/
-```
-
-### Pipeline Execution
-```bash
-# Complete pipeline with all stages (list → detail → pdf → parse)
+# Complete data extraction pipeline
 python -m src.pipeline --stage all
 
 # Individual stages
-python -m src.pipeline --stage list --seeds CEM
+python -m src.pipeline --stage list --seeds CEM,AGR,BIO
 python -m src.pipeline --stage detail
-python -m src.pipeline --stage pdf
-python -m src.pipeline --stage parse
-
-# Pipeline control
-python -m src.pipeline --reset-seeds
-python -m src.pipeline --no-resume
-python -m src.pipeline --log-level DEBUG
-python -m src.pipeline --max-iterations 3
 ```
 
 ### PDF Management
 ```bash
-# Direct download (CERT MOV RESIDUOS INT AMB only)
+# Primary PDF download (direct method)
 python cert_mov_direct_downloader.py
-python cert_mov_direct_downloader.py --test  # Test mode (5 docs only)
 
-# Interactive download (fallback for failures)
+# Fallback PDF download (interactive Playwright)
 python interactive_pdf_downloader.py
-python interactive_pdf_downloader.py --type "CERT MOV RESIDUOS INT AMB"
-python interactive_pdf_downloader.py --retry-failed
 
-# PDF parsing (extração aprimorada com todos os campos)
+# PDF parsing with 15-field extraction
 python pdf_parser_standalone.py
 python pdf_parser_standalone.py --force-reparse
 python pdf_parser_standalone.py --document 16000520
-python pdf_parser_standalone.py --file specific_file.pdf
-python pdf_parser_standalone.py --type "CERT MOV RESIDUOS INT AMB"
-
-# Direct PDF download with retry management
-python pdf_direct_downloader.py
 ```
 
 ### Monitoring and Utilities
 ```bash
 # Progress monitoring
 python monitor_progress.py
-python monitor_progress.py --doc-type "CERT MOV RESIDUOS INT AMB"
-python monitor_progress.py --save report.txt
-python monitor_progress.py --missing-only
 
-# Utility commands
+# Data management utilities
 python cadri_utils.py list-types
-python cadri_utils.py count --type "CERT MOV RESIDUOS INT AMB"
-python cadri_utils.py reset --type "CERT MOV RESIDUOS INT AMB" --status not_found
-python cadri_utils.py cleanup --min-size 10
-python cadri_utils.py export-failed --output failed.csv
+python cadri_utils.py count
 python cadri_utils.py validate
-python cadri_utils.py quick-download --limit 5
 ```
 
-### Setup
+### Development Tools
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Testing
+pytest
+pytest --cov=src --cov-report=html
 
-# Install Playwright browsers
-playwright install chromium
-
-# Setup environment
-cp .env.example .env
+# Code quality
+black src/ tests/
+flake8 src/ tests/
+mypy src/
 ```
 
-## Architecture
+## Core Architecture
 
-### Pipeline Flow
-The system follows a 4-stage ETL pipeline:
-1. **List** → Search companies via Playwright (headless browser)
+### 4-Stage Pipeline
+1. **List** → Search companies via Playwright
 2. **Detail** → Extract CADRI documents via httpx/BeautifulSoup
-3. **PDF** → Download PDFs using direct method + interactive fallback
-4. **Parse** → Extract waste data with PyMuPDF
+3. **Download** → Download PDFs using direct method + interactive fallback
+4. **Parse** → Extract 15 structured fields from PDFs using PyMuPDF
 
-### Core Components
+### Key Components
+- **src/pipeline.py**: Main orchestrator
+- **cert_mov_direct_downloader.py**: Primary PDF downloader
+- **interactive_pdf_downloader.py**: Fallback downloader
+- **pdf_parser_standalone.py**: Enhanced PDF parser (15 fields)
+- **src/store_csv.py**: CSV persistence with deduplication
 
-- **pipeline.py**: Main orchestrator with signal handling and checkpoints
-- **seeds.py**: Adaptive search strategy with 3→4 character refinement
-- **scrape_list.py**: Company search using Playwright
-- **scrape_detail.py**: Document extraction with httpx/BeautifulSoup
-- **cert_mov_direct_downloader.py**: Direct PDF downloads using discovered URL pattern
-- **interactive_pdf_downloader.py**: Playwright-based fallback for failed downloads
-- **pdf_parser_standalone.py**: PDF text extraction and waste parsing with PyMuPDF
-- **monitor_progress.py**: Progress monitoring and reporting
-- **cadri_utils.py**: Utility commands for data management
-- **store_csv.py**: CSV persistence with deduplication
-- **config.py**: Centralized configuration from .env
+## Data Output
 
-### Data Storage
+### empresas.csv (Company Data)
+- `cnpj`, `razao_social`, `municipio`, `uf`
+- `numero_cadastro_cetesb`, `descricao_atividade`
 
-Three main CSV outputs:
-- **empresas.csv**: Company data (CNPJ as primary key)
-- **cadri_documentos.csv**: Document metadata (numero_documento as primary key)
-- **cadri_itens.csv**: Waste item details extracted from PDFs with complete field extraction:
-  - Número e descrição do resíduo
-  - Classe, estado físico, OII, quantidade/unidade
-  - Composição aproximada, método utilizado
-  - Cor/cheiro/aspecto, acondicionamento, destino
+### cadri_itens.csv (Technical Data - 15 Fields)
+**Waste Identification:**
+- `numero_residuo` (D099, F001, etc.)
+- `descricao_residuo`, `classe_residuo` (I, IIA, IIB)
+- `estado_fisico` (LIQUIDO, SOLIDO, GASOSO)
 
-### Resilience Features
+**Technical Characteristics:**
+- `quantidade`, `unidade`, `oii`
+- `composicao_aproximada`, `metodo_utilizado`
+- `cor_cheiro_aspecto`
 
-- **Idempotent operations**: Can safely resume from interruption
-- **Checkpoint system**: Saves state every 100 operations
-- **Rate limiting**: Configurable delays with jitter
-- **Adaptive search**: Automatically refines search terms based on results
-- **Error handling**: Comprehensive logging and retry mechanisms
+**Logistics:**
+- `acondicionamento_codigos` (E01,E04,E05)
+- `acondicionamento_descricoes`
+- `destino_codigo`, `destino_descricao`
+
+## Key Features
+
+- **Idempotent operations**: Safe resume from interruption
+- **15-field structured extraction**: Complete technical data from PDFs
+- **Direct PDF download**: Optimized URL pattern discovery
+- **Rate limiting**: Respects server limits
+- **CSV persistence**: Ready-to-analyze structured data
 
 ## Configuration
 
@@ -152,12 +109,10 @@ Environment variables in `.env`:
 - Browser: `HEADLESS`, `BROWSER_TIMEOUT`
 - Limits: `MAX_PAGES`, `MAX_RETRIES`
 - Paths: `DATA_DIR`, `CSV_DIR`, `PDF_DIR`
-- Pipeline: `RESUME_ENABLED`, `CHECKPOINT_INTERVAL`
 
-## Key Constraints
+## Important Notes
 
-- **No CNPJ substring search**: System requires exact CNPJ matches
-- **Corporate stopwords blocked**: "LTDA", "ME", "EPP", "S/A" don't return results
-- **PDF format variations**: Parsing relies on consistent PDF layouts
+- **No CNPJ substring search**: Requires exact CNPJ matches
+- **Corporate stopwords blocked**: "LTDA", "ME", "EPP" don't return results
+- **PDF structure dependency**: Parsing relies on consistent PDF layouts
 - **Rate limiting required**: Must respect server limits to avoid blocks
-- **Headless browser dependency**: Playwright needed for JavaScript-heavy pages
