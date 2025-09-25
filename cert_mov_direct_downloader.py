@@ -134,7 +134,7 @@ class CertMovDirectDownloader:
             return None
 
         # Construir código
-        codigo = f"{idocmn}{ndocmn}{versao}{data_formatted}"
+        codigo = f"{idocmn}{ndocmn.zfill(8)}{versao}{data_formatted}"
 
         # Retornar URL
         return f"https://autenticidade.cetesb.sp.gov.br/pdf/{codigo}.pdf"
@@ -320,12 +320,21 @@ class CertMovDirectDownloader:
             Estatísticas do download
         """
         try:
+            # Import the date filtering function
+            import sys
+            from pathlib import Path
+            sys.path.append(str(Path(__file__).parent / "src"))
+            from store_csv import filter_by_date_cutoff
+
             # Ler documentos do CSV
             df = pd.read_csv(CSV_CADRI_DOCS)
 
             # Filtrar por tipo
             cert_mov = df[df['tipo_documento'] == self.TARGET_DOC_TYPE]
             logger.info(f"Total documentos {self.TARGET_DOC_TYPE}: {len(cert_mov)}")
+
+            # Apply date filter (7 years cutoff)
+            cert_mov = filter_by_date_cutoff(cert_mov, years_cutoff=7)
 
             # Filtrar com URLs válidas
             with_urls = cert_mov[

@@ -88,6 +88,12 @@ class PDFParserStandalone:
                 re.IGNORECASE | re.DOTALL
             ),
 
+            # Padrão para origem do resíduo
+            'origem_residuo': re.compile(
+                r'Origem\s*:\s*(.+?)(?=\s*Classe\s*:|$)',
+                re.IGNORECASE | re.DOTALL
+            ),
+
             # Padrão para acondicionamento (múltiplos)
             'acondicionamento': re.compile(
                 r'Acondicionamento\s*:.*?(?=Destino|$)',
@@ -168,14 +174,35 @@ class PDFParserStandalone:
                 re.DOTALL | re.IGNORECASE
             ),
 
-            # Padrões para entidade de destinação (formato flexível)
+            # Pattern para capturar entidade de destinação baseado na posição após NESTLE
             'entidade_destinacao': re.compile(
-                r'(\d+)\s*\n([^\n]+?)\s+(\d+-\d+-\d+)\s*\n'
-                r'([^\n]+?)\s+(\d+)(?:\s+([^\n]+?))?\s*\n'
-                r'([^\n]+?)\s+([\d-]+)\s+([^\n]+?)\s*\n'
-                r'([^\n]+?)\s*\n'
-                r'([^\n]+?)\s+(\d+)\s+([\d/]+)',
-                re.DOTALL | re.IGNORECASE
+                r'NESTLE.*?LTDA.*?\d+-\d+-\d+.*?'
+                r'(SUZAQUIM\s+INDÚSTRIAS\s+QUÍMICAS\s+LTDA).*?'
+                r'(\d+-\d+-\d+).*?'
+                r'(RUA\s+RAPHAEL\s+DA\s+ANUNCIACAO\s+FONTES).*?'
+                r'(\d+).*?'
+                r'(CHACARAS\s+CERES).*?'
+                r'([\d-]+).*?'
+                r'(SUZANO).*?'
+                r'(Fabricação\s+de\s+outros\s+produtos\s+químicos\s+não\s+especificados\s+anteriormente).*?'
+                r'(\d+\s*-\s*TIETÊ\s+ALTO\s+CABECEIRAS).*?'
+                r'(\d+).*?'
+                r'(\d{2}/\d{2}/\d{4})',
+                re.IGNORECASE | re.DOTALL
+            ),
+
+            # Pattern genérico para qualquer empresa após a NESTLE
+            'entidade_destinacao_simples': re.compile(
+                r'NESTLE.*?LTDA.*?\d+-\d+-\d+.*?'
+                r'([A-Z\s]+(?:LTDA|S\.?A\.?))\s+'
+                r'(\d+-\d+-\d+)',
+                re.IGNORECASE | re.DOTALL
+            ),
+
+            # Pattern flexível apenas para nome e cadastro
+            'entidade_destinacao_flex': re.compile(
+                r'(?!NESTLE)([A-Z\s]+(?:LTDA|S\.?A\.?))\s+(\d+-\d+-\d+)',
+                re.IGNORECASE
             ),
 
             # Dados do cabeçalho do documento
@@ -286,6 +313,23 @@ class PDFParserStandalone:
         # Normalizar quebras de linha múltiplas
         text = re.sub(r'\n{3,}', '\n\n', text)  # Máximo 2 quebras seguidas
         return text.strip()
+
+    def _clean_raw_fragment(self, text: str) -> str:
+        """Limpar fragmento de texto para uso seguro em CSV"""
+        if not text:
+            return ""
+
+        # Remover quebras de linha e caracteres problemáticos
+        cleaned = text.replace('\n', ' ').replace('\r', ' ')
+        # Escapar aspas duplas (problematic for CSV)
+        cleaned = cleaned.replace('"', "'")
+        # Normalizar espaços múltiplos
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        # Limitar tamanho para evitar campos excessivamente longos
+        if len(cleaned) > 500:
+            cleaned = cleaned[:500] + "..."
+
+        return cleaned.strip()
 
     def _identify_doc_type(self, text: str) -> Optional[str]:
         """Identificar tipo de documento"""
@@ -538,34 +582,75 @@ class PDFParserStandalone:
             logger.debug(f"Entidade geradora encontrada: {metadata['geradora_nome']}")
 
         # Extrair dados da entidade de destinação
-        # Procurar padrão após a entidade geradora
-        destino_start = text.find('LEANDRO RAMIRES')
-        if destino_start > 0:
-            destino_section = text[destino_start-20:destino_start+500]
-            destino_match = self.patterns['entidade_destinacao'].search(destino_section)
+        # Tentar primeiro o pattern estruturado baseado na estrutura real do PDF
+        destino_match = self.patterns['entidade_destinacao'].search(text)
 
-            if destino_match:
-                # Grupos: 1=funcionarios_geradora, 2=nome, 3=cadastro, 4=logradouro,
-                # 5=numero, 6=complemento, 7=bairro, 8=cep, 9=municipio,
-                # 10=atividade, 11=bacia, 12=licenca, 13=data_licenca
+        if destino_match:
+            # Pattern completo: 1=nome, 2=cadastro, 3=logradouro, 4=numero, 5=bairro, 6=cep, 7=municipio, 8=atividade, 9=bacia, 10=licenca, 11=data_licenca
+            metadata.update({
+                'destino_entidade_nome': destino_match.group(1).strip(),
+                'destino_entidade_cadastro_cetesb': destino_match.group(2),
+                'destino_entidade_logradouro': destino_match.group(3).strip(),
+                'destino_entidade_numero': destino_match.group(4),
+                'destino_entidade_complemento': '',
+                'destino_entidade_bairro': destino_match.group(5).strip(),
+                'destino_entidade_cep': destino_match.group(6),
+                'destino_entidade_municipio': destino_match.group(7).strip(),
+                'destino_entidade_atividade': destino_match.group(8).strip(),
+                'destino_entidade_bacia_hidrografica': destino_match.group(9).strip(),
+                'destino_entidade_licenca': destino_match.group(10),
+                'destino_entidade_data_licenca': destino_match.group(11),
+                'destino_entidade_uf': 'SP'
+            })
+            logger.debug(f"Entidade de destinação encontrada (completo): {metadata['destino_entidade_nome']}")
 
+        else:
+            # Tentar pattern alternativo mais simples
+            destino_match_simples = self.patterns['entidade_destinacao_simples'].search(text)
+
+            if destino_match_simples:
+                # Pattern genérico simples: apenas 1=nome, 2=cadastro
                 metadata.update({
-                    'destino_entidade_nome': destino_match.group(2).strip(),
-                    'destino_entidade_cadastro_cetesb': destino_match.group(3),
-                    'destino_entidade_logradouro': destino_match.group(4).strip(),
-                    'destino_entidade_numero': destino_match.group(5),
-                    'destino_entidade_complemento': destino_match.group(6).strip() if destino_match.group(6) else '',
-                    'destino_entidade_bairro': destino_match.group(7).strip(),
-                    'destino_entidade_cep': destino_match.group(8),
-                    'destino_entidade_municipio': destino_match.group(9).strip(),
-                    'destino_entidade_atividade': destino_match.group(10).strip(),
-                    'destino_entidade_bacia_hidrografica': destino_match.group(11).strip(),
-                    'destino_entidade_licenca': destino_match.group(12),
-                    'destino_entidade_data_licenca': destino_match.group(13),
+                    'destino_entidade_nome': destino_match_simples.group(1).strip(),
+                    'destino_entidade_cadastro_cetesb': destino_match_simples.group(2),
+                    'destino_entidade_logradouro': '',
+                    'destino_entidade_numero': '',
+                    'destino_entidade_complemento': '',
+                    'destino_entidade_bairro': '',
+                    'destino_entidade_cep': '',
+                    'destino_entidade_municipio': '',
+                    'destino_entidade_atividade': '',
+                    'destino_entidade_bacia_hidrografica': '',
+                    'destino_entidade_licenca': '',
+                    'destino_entidade_data_licenca': '',
                     'destino_entidade_uf': 'SP'
                 })
+                logger.debug(f"Entidade de destinação encontrada (genérico): {metadata['destino_entidade_nome']}")
 
-                logger.debug(f"Entidade de destinação encontrada: {metadata['destino_entidade_nome']}")
+            else:
+                # Tentar pattern flexível como último recurso (apenas nome e cadastro)
+                destino_match_flex = self.patterns['entidade_destinacao_flex'].search(text)
+
+                if destino_match_flex:
+                    # Pattern flexível simples - apenas nome e cadastro garantidos
+                    metadata.update({
+                        'destino_entidade_nome': destino_match_flex.group(1).strip(),
+                        'destino_entidade_cadastro_cetesb': destino_match_flex.group(2),
+                        'destino_entidade_logradouro': '',
+                        'destino_entidade_numero': '',
+                        'destino_entidade_complemento': '',
+                        'destino_entidade_bairro': '',
+                        'destino_entidade_cep': '',
+                        'destino_entidade_municipio': '',
+                        'destino_entidade_atividade': '',
+                        'destino_entidade_bacia_hidrografica': '',
+                        'destino_entidade_licenca': '',
+                        'destino_entidade_data_licenca': '',
+                        'destino_entidade_uf': 'SP'
+                    })
+                    logger.debug(f"Entidade de destinação encontrada (flexível - básico): {metadata['destino_entidade_nome']}")
+                else:
+                    logger.warning("Dados da entidade de destinação não encontrados")
 
         # Extrair número do processo
         processo_match = self.patterns['processo_numero'].search(text)
@@ -642,7 +727,7 @@ class PDFParserStandalone:
                 'item_numero': item_numero.zfill(2),
                 'numero_residuo': numero_residuo,
                 'descricao_residuo': descricao_inicial.strip(),
-                'raw_fragment': residuo_block[:500]  # Primeiros 500 chars
+                'raw_fragment': self._clean_raw_fragment(residuo_block)  # Limpo e seguro para CSV
             })
 
             # Criar item completo
@@ -718,6 +803,11 @@ class PDFParserStandalone:
         if cor_match:
             fields['cor_cheiro_aspecto'] = cor_match.group(1).strip()
 
+        # Origem do resíduo
+        origem_match = self.patterns['origem_residuo'].search(block)
+        if origem_match:
+            fields['origem_residuo'] = origem_match.group(1).strip()
+
         # Acondicionamento - extrair todos os códigos E## do bloco
         e_codes = re.findall(r'E\d{2}', block)
         if e_codes:
@@ -771,6 +861,7 @@ class PDFParserStandalone:
             'item_numero': item_data.get('item_numero', '01'),
             'numero_residuo': item_data.get('numero_residuo', ''),
             'descricao_residuo': item_data.get('descricao_residuo', ''),
+            'origem_residuo': item_data.get('origem_residuo', ''),
             'classe_residuo': item_data.get('classe_residuo', ''),
             'estado_fisico': item_data.get('estado_fisico', ''),
             'oii': item_data.get('oii', ''),
@@ -998,37 +1089,59 @@ class PDFParserStandalone:
 
     def _save_items_to_csv(self, items: List[Dict]):
         """Salvar itens extraídos no CSV com novo schema expandido"""
+        if not items:
+            logger.warning("Nenhum item para salvar")
+            return
+
         try:
             from store_csv import CSVStore, CSVSchemas
 
             # Garantir que o CSV existe com o schema correto
             CSVStore.ensure_csv(Path(CSV_CADRI_ITEMS), CSVSchemas.CADRI_ITEMS_COLS)
 
-            df_new = pd.DataFrame(items)
+            # Limpar e validar todos os itens antes de salvar
+            cleaned_items = []
+            for item in items:
+                cleaned_item = {}
+                for key, value in item.items():
+                    if isinstance(value, str):
+                        # Limpar strings para evitar problemas CSV
+                        cleaned_value = value.replace('\n', ' ').replace('\r', ' ')
+                        cleaned_value = cleaned_value.replace('"', "'")
+                        cleaned_value = re.sub(r'\s+', ' ', cleaned_value).strip()
+                        cleaned_item[key] = cleaned_value
+                    else:
+                        cleaned_item[key] = value
+                cleaned_items.append(cleaned_item)
 
-            # Se o DataFrame não está vazio, usar upsert do CSVStore
-            if not df_new.empty:
-                # Usar número do documento + número do resíduo como chave única
-                keys = ['numero_documento', 'numero_residuo']
+            df_new = pd.DataFrame(cleaned_items)
 
-                # Se numero_residuo não existe, usar campos antigos para compatibilidade
-                if 'numero_residuo' not in df_new.columns and 'codigo_residuo' in df_new.columns:
-                    keys = ['numero_documento', 'codigo_residuo']
-                elif 'item_numero' in df_new.columns:
-                    # Para novo schema expandido, usar documento + item_numero como chave
-                    keys = ['numero_documento', 'item_numero']
+            # Garantir que todas as colunas necessárias existem
+            expected_cols = CSVSchemas.CADRI_ITEMS_COLS
+            for col in expected_cols:
+                if col not in df_new.columns:
+                    df_new[col] = ''
 
-                CSVStore.upsert(df_new, Path(CSV_CADRI_ITEMS), keys)
-                logger.info(f"✅ Salvos {len(items)} itens em {CSV_CADRI_ITEMS}")
-            else:
-                logger.warning("Nenhum item para salvar")
+            # Reordenar colunas conforme schema
+            df_new = df_new[expected_cols]
+
+            # Usar chave adequada para upsert
+            keys = ['numero_documento', 'item_numero']
+
+            CSVStore.upsert(df_new, Path(CSV_CADRI_ITEMS), keys)
+            logger.info(f"✅ Salvos {len(items)} itens em {CSV_CADRI_ITEMS}")
 
         except Exception as e:
             logger.error(f"Erro ao salvar items: {e}")
             # Fallback para método antigo em caso de erro
             try:
-                df_new = pd.DataFrame(items)
-                df_new.to_csv(CSV_CADRI_ITEMS, index=False)
+                df_fallback = pd.DataFrame(cleaned_items if 'cleaned_items' in locals() else items)
+
+                # Escapar caracteres problemáticos no fallback
+                for col in df_fallback.select_dtypes(include=['object']).columns:
+                    df_fallback[col] = df_fallback[col].astype(str).str.replace('\n', ' ').str.replace('\r', ' ')
+
+                df_fallback.to_csv(CSV_CADRI_ITEMS, index=False, encoding='utf-8', quoting=1)
                 logger.info(f"✅ Salvos {len(items)} itens em {CSV_CADRI_ITEMS} (fallback)")
             except Exception as e2:
                 logger.error(f"Erro no fallback: {e2}")

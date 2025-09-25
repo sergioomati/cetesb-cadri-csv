@@ -4,6 +4,13 @@ Sistema automatizado para extrair dados cadastrais de empresas e informações t
 
 ## 📈 Evolução do Projeto
 
+### Versão 3.1 (Setembro 2025) - Parser LLM Integrado
+- **🤖 Parser LLM**: Extração via LLM com structured outputs usando OpenRouter
+- **🔄 Modo híbrido**: LLM com fallback automático para regex parser
+- **📊 Pydantic schemas**: Validação estruturada de 47 campos com type hints
+- **⚙️ Múltiplos parsers**: 5 métodos de parsing (llm, regex, docling, auto, hybrid)
+- **🎯 Alta precisão**: LLM adapta-se a variações de layout nos PDFs
+
 ### Versão 3.0 (Setembro 2025) - Expansão Completa
 - **✨ Extração expandida**: De 15 para 47 campos estruturados por item
 - **🏢 Dados das entidades**: Captura completa de informações de geradores e destinatários
@@ -26,7 +33,7 @@ Sistema automatizado para extrair dados cadastrais de empresas e informações t
 Gerar **duas tabelas de dados estruturadas**:
 
 1. **📋 Dados Cadastrais** (`empresas.csv`) - Informações de todas as empresas listadas no site CETESB
-2. **🗂️ Dados Técnicos** (`cadri_itens.csv`) - Informações detalhadas extraídas dos documentos CADRI com 15 campos estruturados
+2. **🗂️ Dados Técnicos** (`cadri_itens.csv`) - Informações detalhadas extraídas dos documentos CADRI com 47 campos estruturados
 
 ## Instalação
 
@@ -38,12 +45,37 @@ cd cetesb-cadri-csv
 # Instale dependências
 pip install -r requirements.txt
 
+# (Opcional) Para usar parser LLM
+pip install -r requirements-llm.txt
+
 # Instale Playwright browsers
 playwright install chromium
 
 # Configure ambiente
 cp .env.example .env
+# Edite o .env e adicione OPENROUTER_API_KEY se quiser usar parser LLM
 ```
+
+### Configuração do Parser LLM (Opcional)
+
+Para usar o parser baseado em LLM, você precisa:
+
+1. **Obter uma API key do OpenRouter:**
+   - Acesse [OpenRouter.ai](https://openrouter.ai)
+   - Crie uma conta e gere uma API key
+   - Adicione créditos à sua conta (custo por uso)
+
+2. **Configurar a API key no .env:**
+   ```bash
+   OPENROUTER_API_KEY=sk-or-v1-your-key-here
+   LLM_PARSER_ENABLED=true
+   LLM_DEFAULT_MODEL=cost-optimized  # ou 'flagship' para maior precisão
+   ```
+
+3. **Instalar dependências adicionais:**
+   ```bash
+   pip install -r requirements-llm.txt
+   ```
 
 ## Uso Simplificado
 
@@ -64,11 +96,14 @@ python -m src.pipeline --stage detail
 # Etapa 2: Baixar PDFs
 python cert_mov_direct_downloader.py
 
-# Etapa 3: Extrair dados dos PDFs
+# Etapa 3: Extrair dados dos PDFs (regex parser)
 python pdf_parser_standalone.py
+
+# Ou usar parser LLM (requer OpenRouter API key)
+python -m src.llm_pdf_parser
 ```
 
-### 3. Busca por CNPJs (Novo!)
+### 3. Busca por CNPJs
 
 ```bash
 # Pipeline completo com lista de CNPJs
@@ -81,6 +116,43 @@ python -m src.pipeline --stage list --cnpj-file lista_cnpjs.xlsx
 python -m src.pipeline --stage list --cnpj-file empresas.xlsx
 python -m src.pipeline --stage detail
 ```
+
+### 4. Métodos de Parsing (Novo!)
+
+```bash
+# Parser LLM com structured outputs (máxima precisão)
+python -m src.pipeline --stage parse --parser-method llm
+
+# Parser híbrido - LLM com fallback automático (recomendado)
+python -m src.pipeline --stage all --parser-method hybrid
+
+# Parser regex tradicional (mais rápido)
+python -m src.pipeline --stage parse --parser-method regex
+
+# Parser Docling avançado
+python -m src.pipeline --stage parse --parser-method docling
+
+# Seleção automática inteligente
+python -m src.pipeline --stage parse --parser-method auto
+```
+
+#### Comparação dos Métodos de Parsing
+
+| Método | Precisão | Velocidade | Flexibilidade | Custo |
+|--------|----------|------------|---------------|-------|
+| **LLM** | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | Médio |
+| **Híbrido** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Baixo |
+| **Regex** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | Grátis |
+| **Docling** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Grátis |
+| **Auto** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Variável |
+
+##### Modelos LLM Disponíveis (via OpenRouter)
+
+O parser LLM pode usar diferentes modelos configurados no `open_router_controller.py`:
+- **`cost-optimized`** (padrão): Google Gemini 2.5 Flash - Balanço entre custo e qualidade
+- **`flagship`**: Google Gemini 2.5 Pro - Máxima precisão
+- **`free-gemini`**: Google Gemini 2.0 Flash (grátis, mas limitado)
+- **`deepseek`**: DeepSeek Chat v3.1 - Alternativa de custo baixo
 
 ## Arquitetura
 
@@ -105,10 +177,18 @@ List    →   Detail  →  Download → Parse
 - **`src/pdf_url_builder.py`**: Construção inteligente de URLs de PDFs
 
 #### 📊 Parser e Análise
-- **`pdf_parser_standalone.py`**: Extrator avançado com 47 campos estruturados
+- **`pdf_parser_standalone.py`**: Extrator regex avançado com 47 campos estruturados
   - Extração de dados das entidades (geradora/destinação)
   - Parsing de características técnicas dos resíduos
   - Captura de metadados do documento
+- **`src/llm_pdf_parser.py`**: Parser LLM com structured outputs
+  - Usa OpenRouter API para extração via LLM
+  - Structured outputs com validação Pydantic
+  - Fallback automático para regex parser
+- **`src/schemas.py`**: Schemas Pydantic para validação de dados
+  - Modelos de dados estruturados para 47 campos
+  - Type hints e validação automática
+  - Conversão para formato CSV plano
 
 #### 🛠️ Utilitários
 - **`monitor_progress.py`**: Dashboard de progresso em tempo real
@@ -233,6 +313,16 @@ BROWSER_TIMEOUT=30000
 # Limites
 MAX_PAGES=10
 MAX_RETRIES=3
+
+# LLM Parser (opcional - necessário para usar parser LLM)
+LLM_PARSER_ENABLED=true
+LLM_DEFAULT_MODEL=cost-optimized
+LLM_MAX_TEXT_LENGTH=15000
+LLM_TEMPERATURE=0.1
+LLM_BATCH_SIZE=100
+
+# OpenRouter API Key (necessário para parser LLM)
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 ```
 
 ## Resultados Esperados
@@ -251,18 +341,23 @@ Com a configuração padrão, o sistema extrai:
 
 - **🔄 Operações idempotentes**: Pode ser interrompido e retomado
 - **📊 Extração estruturada**: 47 campos técnicos expandidos por item
+- **🤖 Parser LLM**: Extração via IA com structured outputs (OpenRouter)
+- **🔀 Múltiplos métodos**: 5 opções de parsing (LLM, regex, docling, auto, híbrido)
+- **✅ Validação Pydantic**: Schemas estruturados com type hints
 - **⚡ Download otimizado**: URL pattern discovery para downloads diretos
 - **🛡️ Rate limiting**: Respeita limites do servidor
 - **💾 Persistência CSV**: Dados estruturados prontos para análise
 - **🎯 Parser inteligente**: Reconhecimento de padrões complexos em PDFs
 - **📈 Monitoramento real-time**: Dashboard de progresso detalhado
+- **↩️ Fallback automático**: Modo híbrido usa regex se LLM falhar
 
 ## Limitações
 
 1. **Sem API pública**: Sistema baseado em web scraping
-2. **Dependente de layout**: PDFs devem seguir padrão estruturado
+2. **Dependente de layout**: Parser regex requer PDFs com padrão estruturado (LLM é mais flexível)
 3. **Rate limiting obrigatório**: Necessário respeitar limites do servidor
-4. **Stopwords corporativas**: Termos como "LTDA", "ME" não retornam resultados
+4. **Stopwords corporativas**: Termos como "LTDA", "ME" não retornam resultados em buscas textuais
+5. **Custo do LLM**: Parser LLM requer API key do OpenRouter e tem custo por token processado
 
 ## Suporte
 

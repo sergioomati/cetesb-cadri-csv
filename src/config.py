@@ -55,3 +55,16 @@ CHECKPOINT_INTERVAL = int(os.getenv("CHECKPOINT_INTERVAL", "100"))
 
 # Document type to filter
 TARGET_DOC_TYPE = "CERT MOV RESIDUOS INT AMB"
+
+# LLM Parser Configuration
+LLM_PARSER_ENABLED = os.getenv("LLM_PARSER_ENABLED", "true").lower() == "true"
+LLM_DEFAULT_MODEL = os.getenv("LLM_DEFAULT_MODEL", "gpt-5-mini")
+LLM_MAX_TEXT_LENGTH = int(os.getenv("LLM_MAX_TEXT_LENGTH", "15000"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+LLM_BATCH_SIZE = int(os.getenv("LLM_BATCH_SIZE", "100"))
+
+# OpenRouter API Configuration (inherited from OpenRouterController)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY and LLM_PARSER_ENABLED:
+    import warnings
+    warnings.warn("LLM_PARSER_ENABLED=true but OPENROUTER_API_KEY not found. LLM parsing will not work.")

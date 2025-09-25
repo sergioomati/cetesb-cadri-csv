@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import hashlib
 from logging_conf import logger
@@ -158,6 +158,7 @@ class CSVSchemas:
         'item_numero',                # Número sequencial do item (01, 02, etc.)
         'numero_residuo',             # Código do resíduo (D099, F001, etc.)
         'descricao_residuo',          # Descrição completa do resíduo
+        'origem_residuo',             # Origem do resíduo
         'classe_residuo',             # Classe (I, II, IIA, IIB, etc.)
         'estado_fisico',              # Estado físico (LÍQUIDO, SÓLIDO, GASOSO)
         'oii',                        # Campo OII
@@ -230,11 +231,78 @@ def hash_file(file_path: Path) -> str:
     return sha256_hash.hexdigest()
 
 
-def get_pending_pdfs() -> List[Dict[str, str]]:
-    """Get list of PDFs that need to be downloaded (only those with valid URLs)"""
+def filter_by_date_cutoff(df: pd.DataFrame, years_cutoff: int = 7) -> pd.DataFrame:
+    """
+    Filter documents by date cutoff (only keep recent documents)
+
+    Args:
+        df: DataFrame with 'data_desde' column
+        years_cutoff: Number of years back to keep (default: 7)
+
+    Returns:
+        Filtered DataFrame with only recent documents
+    """
+    if df.empty:
+        return df
+
+    # Calculate cutoff date
+    cutoff_date = datetime.now() - timedelta(days=365 * years_cutoff)
+    cutoff_str = cutoff_date.strftime('%Y-%m-%d')
+
+    logger.info(f"Aplicando filtro de data: documentos >= {cutoff_str} ({years_cutoff} anos)")
+
+    # Convert data_desde to datetime
+    df['data_desde_dt'] = pd.to_datetime(df['data_desde'], errors='coerce')
+
+    # Count before filtering
+    total_before = len(df)
+    valid_dates = df['data_desde_dt'].notna().sum()
+    invalid_dates = total_before - valid_dates
+
+    # Filter recent documents (keep if data_desde >= cutoff_date OR data_desde is null/invalid)
+    # Keep invalid dates to avoid losing documents that might be important
+    recent_docs = df[
+        (df['data_desde_dt'] >= cutoff_date) |
+        (df['data_desde_dt'].isna())
+    ]
+
+    # Clean up temporary column
+    recent_docs = recent_docs.drop(columns=['data_desde_dt'])
+
+    # Log statistics
+    filtered_out = total_before - len(recent_docs)
+    logger.info(f"Filtro de data aplicado:")
+    logger.info(f"  - Total de documentos: {total_before}")
+    logger.info(f"  - Datas válidas: {valid_dates}")
+    logger.info(f"  - Datas inválidas/vazias: {invalid_dates}")
+    logger.info(f"  - Documentos filtrados (muito antigos): {filtered_out}")
+    logger.info(f"  - Documentos restantes: {len(recent_docs)}")
+
+    return recent_docs
+
+
+def get_pending_pdfs(apply_date_filter: bool = True, years_cutoff: int = 7) -> List[Dict[str, str]]:
+    """
+    Get list of PDFs that need to be downloaded (only those with valid URLs)
+
+    Args:
+        apply_date_filter: Whether to apply date filtering (default: True)
+        years_cutoff: Number of years back to keep (default: 7)
+
+    Returns:
+        List of documents ready for download
+    """
     from config import CSV_CADRI_DOCS
 
     df = CSVStore.load_csv(CSV_CADRI_DOCS)
+
+    if df.empty:
+        logger.info("Nenhum documento encontrado no CSV")
+        return []
+
+    # Apply date filter first if requested
+    if apply_date_filter:
+        df = filter_by_date_cutoff(df, years_cutoff)
 
     # Filter where status_pdf is not 'downloaded' AND has valid URL
     pending = df[
@@ -243,6 +311,8 @@ def get_pending_pdfs() -> List[Dict[str, str]]:
         (df['url_pdf'] != '') &
         (df['url_pdf'].str.contains('autenticidade.cetesb', na=False))
     ]
+
+    logger.info(f"PDFs pendentes para download: {len(pending)}")
 
     return pending[['numero_documento', 'url_pdf']].to_dict('records')
 
@@ -281,3 +351,98 @@ def mark_pdf_status(numero_documento: str, status: str, pdf_hash: Optional[str] 
 
     df.to_csv(CSV_CADRI_DOCS, index=False, encoding='utf-8')
     logger.debug(f"Updated PDF status for {numero_documento}: {status}")
+
+
+def analyze_documents_by_date(years_cutoff: int = 7) -> Dict[str, any]:
+    """
+    Analyze document distribution by date and show filtering impact
+
+    Args:
+        years_cutoff: Number of years back to analyze (default: 7)
+
+    Returns:
+        Dictionary with analysis results
+    """
+    from config import CSV_CADRI_DOCS
+
+    df = CSVStore.load_csv(CSV_CADRI_DOCS)
+
+    if df.empty:
+        return {"error": "No documents found"}
+
+    # Calculate cutoff date
+    cutoff_date = datetime.now() - timedelta(days=365 * years_cutoff)
+    cutoff_str = cutoff_date.strftime('%Y-%m-%d')
+
+    # Convert data_desde to datetime
+    df['data_desde_dt'] = pd.to_datetime(df['data_desde'], errors='coerce')
+
+    # Basic statistics
+    total_docs = len(df)
+    valid_dates = df['data_desde_dt'].notna().sum()
+    invalid_dates = total_docs - valid_dates
+
+    # Documents by year
+    df_with_dates = df[df['data_desde_dt'].notna()].copy()
+    df_with_dates['year'] = df_with_dates['data_desde_dt'].dt.year
+    year_counts = df_with_dates['year'].value_counts().sort_index()
+
+    # Apply filtering
+    recent_docs = df[
+        (df['data_desde_dt'] >= cutoff_date) |
+        (df['data_desde_dt'].isna())
+    ]
+
+    # Documents by type
+    type_counts = df['tipo_documento'].value_counts()
+    type_counts_recent = recent_docs['tipo_documento'].value_counts()
+
+    # URLs available
+    with_urls = df[
+        df['url_pdf'].notna() &
+        (df['url_pdf'] != '') &
+        (df['url_pdf'] != 'pending')
+    ]
+    with_urls_recent = recent_docs[
+        recent_docs['url_pdf'].notna() &
+        (recent_docs['url_pdf'] != '') &
+        (recent_docs['url_pdf'] != 'pending')
+    ]
+
+    # Prepare results
+    analysis = {
+        'cutoff_date': cutoff_str,
+        'years_cutoff': years_cutoff,
+        'total_documents': total_docs,
+        'documents_with_valid_dates': int(valid_dates),
+        'documents_with_invalid_dates': invalid_dates,
+        'documents_after_cutoff': len(recent_docs),
+        'documents_filtered_out': total_docs - len(recent_docs),
+        'documents_with_urls': len(with_urls),
+        'documents_with_urls_recent': len(with_urls_recent),
+        'urls_filtered_out': len(with_urls) - len(with_urls_recent),
+        'year_distribution': year_counts.to_dict(),
+        'type_distribution_all': type_counts.to_dict(),
+        'type_distribution_recent': type_counts_recent.to_dict()
+    }
+
+    # Log summary
+    logger.info("=== ANÁLISE DE DOCUMENTOS POR DATA ===")
+    logger.info(f"Data de corte: {cutoff_str} ({years_cutoff} anos)")
+    logger.info(f"Total de documentos: {total_docs}")
+    logger.info(f"Documentos com datas válidas: {valid_dates}")
+    logger.info(f"Documentos filtrados (antigos): {analysis['documents_filtered_out']}")
+    logger.info(f"Documentos restantes: {analysis['documents_after_cutoff']}")
+    logger.info(f"URLs disponíveis (antes): {len(with_urls)}")
+    logger.info(f"URLs disponíveis (depois): {len(with_urls_recent)}")
+    logger.info(f"URLs economizadas: {analysis['urls_filtered_out']}")
+
+    if year_counts.empty:
+        logger.warning("Nenhum documento com data válida encontrado")
+    else:
+        logger.info("Distribuição por ano:")
+        for year, count in year_counts.tail(10).items():  # Last 10 years
+            marker = " (incluído)" if year >= cutoff_date.year else " (filtrado)"
+            logger.info(f"  {year}: {count} documentos{marker}")
+
+    return analysis

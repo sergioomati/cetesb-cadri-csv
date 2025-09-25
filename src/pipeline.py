@@ -227,29 +227,100 @@ class Pipeline:
         self.checkpoint()
         return total_stats
 
-    def stage_parse(self, force_reparse: bool = False):
-        """Stage 4: Parse downloaded PDFs to extract waste data"""
+    def stage_parse(self, force_reparse: bool = False, parser_method: str = "auto"):
+        """
+        Stage 4: Parse downloaded PDFs to extract waste data
+
+        Args:
+            force_reparse: Reprocess PDFs even if already parsed
+            parser_method: Parser method to use ('llm', 'regex', 'docling', 'auto', 'hybrid')
+        """
         logger.info("=== Starting Stage 4: PDF Parsing ===")
 
         # Import PDF parser
         from pathlib import Path
         sys.path.append(str(Path(__file__).parent.parent))
 
+        stats = {"parsed": 0, "failed": 0}
+
+        # LLM parser option
+        if parser_method == "llm":
+            try:
+                # Adicionar src ao path para garantir imports corretos
+                sys.path.insert(0, str(Path(__file__).parent))
+                from llm_pdf_parser import LLMPDFParser
+                logger.info("Using LLM structured output parser")
+
+                parser = LLMPDFParser()
+                stats = parser.parse_all_pdfs(force_reparse=force_reparse)
+                logger.info(f"LLM parsing stats: {stats}")
+                self.checkpoint()
+                return stats
+
+            except ImportError as e:
+                logger.error(f"Could not import LLM parser: {e}")
+                return {"parsed": 0, "failed": 0, "error": "LLM parser not available"}
+
+        # Hybrid parser (LLM with fallback)
+        elif parser_method == "hybrid":
+            try:
+                # Adicionar src ao path para garantir imports corretos
+                sys.path.insert(0, str(Path(__file__).parent))
+                from llm_pdf_parser import LLMPDFParser
+                logger.info("Using hybrid parser (LLM + fallback)")
+
+                parser = LLMPDFParser()
+                stats = parser.parse_all_pdfs(force_reparse=force_reparse)
+                logger.info(f"Hybrid parsing stats: {stats}")
+                self.checkpoint()
+                return stats
+
+            except ImportError as e:
+                logger.warning(f"LLM parser not available: {e}, falling back to regex parser")
+                parser_method = "regex"
+
+        # Try enhanced Docling parser first (for auto mode)
+        if parser_method in ["docling", "auto"]:
+            try:
+                from docling_parser import DoclingPDFParser, DOCLING_AVAILABLE
+
+                if DOCLING_AVAILABLE:
+                    logger.info("Using enhanced Docling parser")
+                    parser = DoclingPDFParser()
+                    stats = parser.parse_all_pdfs(force_reparse=force_reparse)
+                    logger.info(f"Docling parsing stats: {stats}")
+                    self.checkpoint()
+                    return stats
+                else:
+                    if parser_method == "docling":
+                        logger.error("Docling parser requested but not available")
+                        return {"parsed": 0, "failed": 0, "error": "Docling not available"}
+                    logger.warning("Docling not available, falling back to standard parser")
+
+            except ImportError as e:
+                if parser_method == "docling":
+                    logger.error(f"Could not import Docling parser: {e}")
+                    return {"parsed": 0, "failed": 0, "error": "Docling parser not available"}
+                logger.warning(f"Could not import Docling parser: {e}, falling back to standard parser")
+
+        # Fallback to standard regex parser
         try:
             from pdf_parser_standalone import PDFParser
+            logger.info("Using standard PyMuPDF regex parser")
+
+            with PDFParser() as parser:
+                stats = parser.parse_all_pdfs(force_reparse=force_reparse)
+
         except ImportError as e:
             logger.error(f"Could not import PDF parser: {e}")
-            return {"parsed": 0, "failed": 0}
-
-        with PDFParser() as parser:
-            stats = parser.parse_all_pdfs(force_reparse=force_reparse)
+            return {"parsed": 0, "failed": 0, "error": "No parser available"}
 
         logger.info(f"PDF parsing stats: {stats}")
         self.checkpoint()
         return stats
 
 
-    async def run_all(self, max_iterations: int = 5, cnpjs: list = None):
+    async def run_all(self, max_iterations: int = 5, cnpjs: list = None, parser_method: str = "auto"):
         """Run complete pipeline (all stages)"""
         logger.info("=== Starting Complete CADRI Pipeline ===")
         CSVSchemas.init_all()
@@ -301,7 +372,7 @@ class Pipeline:
 
             # Stage 4: PDF Parsing (after downloads)
             logger.info("\n=== Starting PDF Parsing Stage ===")
-            parse_stats = self.stage_parse()
+            parse_stats = self.stage_parse(parser_method=parser_method)
 
             logger.info("\n=== Complete Pipeline Summary ===")
             logger.info(f"Data collection: {metrics.get_summary()}")
@@ -315,7 +386,7 @@ class Pipeline:
         logger.info("   - data/csv/cadri_itens.csv (waste item details)")
         logger.info("   - data/pdf/ (downloaded PDFs)")
 
-    async def run_stage(self, stage: str, **kwargs):
+    async def run_stage(self, stage: str, parser_method: str = "auto", **kwargs):
         """Run a specific stage"""
         CSVSchemas.init_all()
 
@@ -333,12 +404,12 @@ class Pipeline:
             await self.stage_pdf()
 
         elif stage == 'parse':
-            self.stage_parse()
+            self.stage_parse(parser_method=parser_method)
 
         elif stage == 'all':
             max_iter = kwargs.get('max_iterations', 5)
             cnpjs = kwargs.get('cnpjs', [])
-            await self.run_all(max_iter, cnpjs=cnpjs)
+            await self.run_all(max_iter, cnpjs=cnpjs, parser_method=parser_method)
 
         else:
             logger.error(f"Unknown stage: {stage}")
@@ -373,6 +444,13 @@ def main():
         type=int,
         default=5,
         help='Maximum iterations for complete pipeline'
+    )
+
+    parser.add_argument(
+        '--parser-method',
+        choices=['llm', 'regex', 'docling', 'auto', 'hybrid'],
+        default='auto',
+        help='PDF parser method to use: llm (LLM structured output), regex (PyMuPDF regex), docling (enhanced), auto (intelligent selection), hybrid (LLM with fallback)'
     )
 
     parser.add_argument(
@@ -442,6 +520,7 @@ def main():
         asyncio.run(
             pipeline.run_stage(
                 args.stage,
+                parser_method=args.parser_method,
                 seeds=args.seeds,
                 cnpjs=cnpjs,
                 max_iterations=args.max_iterations

@@ -104,7 +104,7 @@ def build_pdf_url(
     versao = versao.strip()
 
     # Construir código
-    codigo = f"{idocmn}{ndocmn}{versao}{data_formatted}"
+    codigo = f"{idocmn}{ndocmn.zfill(8)}{versao}{data_formatted}"
 
     # Retornar URL
     return f"https://autenticidade.cetesb.sp.gov.br/pdf/{codigo}.pdf"

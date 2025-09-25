@@ -236,8 +236,14 @@ class InteractivePDFDownloader:
             Estatísticas do download
         """
         try:
+            # Import the date filtering function
+            from store_csv import filter_by_date_cutoff
+
             # Ler documentos do CSV
             df = pd.read_csv(CSV_CADRI_DOCS)
+
+            # Apply date filter first (7 years cutoff)
+            df = filter_by_date_cutoff(df, years_cutoff=7)
 
             # Filtrar documentos que falharam no download direto
             failed_statuses = ['not_found', 'timeout', 'error', 'invalid_download']
